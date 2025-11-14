@@ -14,6 +14,7 @@ import carPlansRouter from './carPlans.js';
 import weeklyRentPlansRouter from './weeklyRentPlans.js';
 import dailyRentPlansRouter from './dailyRentPlans.js';
 import expensesRouter from './expenses.js';
+import vehicleOptionsRouter from './vehicleOptions.js';
 // Static routes commented out - now using database
 // import staticInvestmentsRouter from './staticInvestments.js';
 // import staticInvestmentPlansRouter from './staticInvestmentPlans.js';
@@ -41,6 +42,7 @@ router.use('/car-plans', carPlansRouter);
 router.use('/weekly-rent-plans', weeklyRentPlansRouter);
 router.use('/daily-rent-plans', dailyRentPlansRouter);
 router.use('/expenses', expensesRouter);
+router.use('/vehicle-options', vehicleOptionsRouter);
 // Static investment routes disabled - now using database routes above
 // router.use('/static/investments', staticInvestmentsRouter);
 // router.use('/static/investment-plans', staticInvestmentPlansRouter);
