@@ -19,11 +19,9 @@ function stripAuthFields(source) {
 router.get('/', async (req, res) => {
   try {
     const list = await CarPlan.find().lean();
-    console.log('GET /api/car-plans - Found', list.length, 'plans');
-    console.log('Plans data:', JSON.stringify(list, null, 2));
     res.json(list);
   } catch (err) {
-    console.error('GET /api/car-plans error:', err);
+    console.error(err);
     res.status(500).json({ message: 'Failed to load car plans' });
   }
 });
