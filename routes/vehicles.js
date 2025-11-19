@@ -160,6 +160,17 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('Error fetching vehicles:', err);
     res.status(500).json({ message: 'Failed to fetch vehicles' });
+  // Get vehicles by investorId
+  router.get('/investor/:investorId', async (req, res) => {
+    try {
+      const { investorId } = req.params;
+      const vehicles = await Vehicle.find({ investorId }).lean();
+      res.json(vehicles.map(normalizeVehicleShape));
+    } catch (err) {
+      console.error('Error fetching vehicles for investor:', err);
+      res.status(500).json({ message: 'Failed to fetch vehicles for investor' });
+    }
+  });
   }
 });
 

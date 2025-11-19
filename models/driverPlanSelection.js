@@ -42,6 +42,17 @@ const DriverPlanSelectionSchema = new mongoose.Schema({
     enum: ['Cash', 'Bank Transfer', 'Cheque', 'Online', 'UPI'],
     default: 'Cash'
   },
+  // Manual payment amount entered by driver (can differ from calculated total)
+  paidAmount: { type: Number, default: null },
+  // Payment type: 'rent' or 'security'
+  paymentType: { type: String, enum: ['rent', 'security'], default: 'rent' },
+  // Rent calculation start date (set on payment confirmation)
+  rentStartDate: {
+    type: Date,
+    default: null
+  },
+  // Convenience field for daily rent amount locked at selection time
+  rentPerDay: { type: Number, default: 0 },
   // Calculated payment breakdown stored at creation/update
   calculatedDeposit: { type: Number, default: 0 },
   calculatedRent: { type: Number, default: 0 },

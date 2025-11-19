@@ -99,6 +99,33 @@ router.get('/:id', async (req, res) => {
     const totalAmount = selection.calculatedTotal || (deposit + rent + cover);
     
     // Add payment breakdown to response
+    // Compute daily rent summary if started
+    let dailyRentSummary = null;
+    try {
+      if (selection.rentStartDate) {
+        const rentPerDay = selection.rentPerDay || (selection.selectedRentSlab?.rentDay || 0) || 0;
+        const start = new Date(selection.rentStartDate);
+        const toYmd = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        let cur = toYmd(start);
+        const end = toYmd(new Date());
+        let totalDays = 0;
+        while (cur <= end) {
+          totalDays += 1;
+          cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
+          if (totalDays > 3660) break;
+        }
+        dailyRentSummary = {
+          hasStarted: true,
+          totalDays,
+          rentPerDay,
+          totalDue: rentPerDay * totalDays,
+          startDate: selection.rentStartDate
+        };
+      }
+    } catch (e) {
+      console.warn('Failed to compute dailyRentSummary:', e.message);
+    }
+
     const response = {
       ...selection,
       paymentBreakdown: {
@@ -107,7 +134,8 @@ router.get('/:id', async (req, res) => {
         rentType: selection.planType === 'weekly' ? 'weeklyRent' : 'dailyRent',
         accidentalCover: cover,
         totalAmount: totalAmount
-      }
+      },
+      dailyRentSummary
     };
     
     res.json(response);
@@ -151,6 +179,9 @@ router.post('/', authenticateDriver, async (req, res) => {
     const cover = planType === 'weekly' ? (slab.accidentalCover || 105) : 0;
     const totalAmount = deposit + rent + cover;
 
+    // Lock rent per day from selected slab
+    const rentPerDay = typeof slab.rentDay === 'number' ? slab.rentDay : 0;
+
     // Create new selection with calculated values
     const selection = new DriverPlanSelection({
       driverSignupId: req.driver.id,
@@ -168,7 +199,10 @@ router.post('/', authenticateDriver, async (req, res) => {
       calculatedDeposit: deposit,
       calculatedRent: rent,
       calculatedCover: cover,
-      calculatedTotal: totalAmount
+      calculatedTotal: totalAmount,
+      // Start daily rent accrual from today
+      rentStartDate: new Date(),
+      rentPerDay: rentPerDay
     });
 
     await selection.save();
@@ -191,11 +225,24 @@ router.post('/:id/confirm-payment', async (req, res) => {
       body: req.body
     });
 
-    const { paymentMode } = req.body;
+    const { paymentMode, paidAmount, paymentType } = req.body;
 
     if (!paymentMode || !['online', 'cash'].includes(paymentMode)) {
       console.log('Invalid payment mode:', paymentMode);
       return res.status(400).json({ message: 'Invalid payment mode. Must be online or cash' });
+    }
+
+    // Validate manual payment amount if provided
+    if (paidAmount !== undefined && paidAmount !== null) {
+      const amount = Number(paidAmount);
+      if (isNaN(amount) || amount <= 0) {
+        return res.status(400).json({ message: 'Invalid payment amount. Must be a positive number' });
+      }
+    }
+
+    // Validate payment type
+    if (paymentType && !['rent', 'security'].includes(paymentType)) {
+      return res.status(400).json({ message: 'Invalid payment type. Must be rent or security' });
     }
 
     const selection = await DriverPlanSelection.findById(req.params.id);
@@ -213,12 +260,21 @@ router.post('/:id/confirm-payment', async (req, res) => {
     selection.paymentMode = paymentMode;
     selection.paymentStatus = 'completed';
     selection.paymentDate = new Date();
+    
+    // Store the manually entered payment amount and type
+    if (paidAmount !== undefined && paidAmount !== null) {
+      selection.paidAmount = Number(paidAmount);
+      selection.paymentType = paymentType || 'rent';
+      console.log('Storing manual payment amount:', selection.paidAmount, 'Type:', selection.paymentType);
+    }
 
     const updatedSelection = await selection.save();
     console.log('Payment confirmed successfully:', {
       id: updatedSelection._id,
       paymentMode: updatedSelection.paymentMode,
-      paymentStatus: updatedSelection.paymentStatus
+      paymentStatus: updatedSelection.paymentStatus,
+      paidAmount: updatedSelection.paidAmount,
+      paymentType: updatedSelection.paymentType
     });
 
     res.json({ 
@@ -231,7 +287,97 @@ router.post('/:id/confirm-payment', async (req, res) => {
   }
 });
 
-// Update plan selection status
+// GET - Daily rent summary from start date till today
+router.get('/:id/rent-summary', async (req, res) => {
+  try {
+    const selection = await DriverPlanSelection.findById(req.params.id).lean();
+    if (!selection) {
+      return res.status(404).json({ message: 'Plan selection not found' });
+    }
+
+    // If status is inactive, stop calculating rent
+    if (selection.status === 'inactive' || !selection.rentStartDate) {
+      return res.json({
+        hasStarted: false,
+        totalDays: 0,
+        rentPerDay: selection.rentPerDay || (selection.selectedRentSlab?.rentDay || 0),
+        totalDue: 0,
+        entries: [],
+        status: selection.status
+      });
+    }
+
+    const rentPerDay = selection.rentPerDay || (selection.selectedRentSlab?.rentDay || 0) || 0;
+    const start = new Date(selection.rentStartDate);
+    const today = new Date();
+    // Normalize to local midnight for day-diff consistency
+    const toYmd = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    let cur = toYmd(start);
+    const end = toYmd(today);
+
+    // Build per-day entries inclusive of start and end
+    const entries = [];
+    let totalDays = 0;
+    while (cur <= end) {
+      entries.push({ date: cur.toISOString().slice(0, 10), amount: rentPerDay });
+      totalDays += 1;
+      cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
+      // Safety cap: avoid infinite loop due to bad dates
+      if (totalDays > 3660) break; // ~10 years cap
+    }
+
+    const totalDue = rentPerDay * totalDays;
+    return res.json({
+      hasStarted: true,
+      totalDays,
+      rentPerDay,
+      totalDue,
+      startDate: selection.rentStartDate,
+      asOfDate: end.toISOString().slice(0, 10),
+      entries,
+      status: selection.status
+    });
+  } catch (error) {
+    console.error('Get daily rent summary error:', error);
+    res.status(500).json({ message: 'Failed to compute daily rent summary' });
+  }
+});
+
+// Update plan selection status (Admin endpoint - no auth required for admin)
+router.put('/:id/status', async (req, res) => {
+  try {
+    const { status } = req.body;
+    
+    if (!status) {
+      return res.status(400).json({ message: 'Status is required' });
+    }
+
+    const selection = await DriverPlanSelection.findById(req.params.id);
+    if (!selection) {
+      return res.status(404).json({ message: 'Plan selection not found' });
+    }
+
+    selection.status = status;
+    
+    // If making inactive, optionally stop rent calculation by clearing rentStartDate
+    // Comment out the next line if you want to keep rent history when reactivating
+    // if (status === 'inactive') {
+    //   selection.rentStartDate = null;
+    // }
+    
+    await selection.save();
+
+    res.json({
+      message: 'Plan selection status updated successfully',
+      selection
+    });
+  } catch (err) {
+    console.error('Update plan selection status error:', err);
+    res.status(500).json({ message: 'Failed to update plan selection status' });
+  }
+});
+
+// Update plan selection (Driver endpoint)
 router.put('/:id', authenticateDriver, async (req, res) => {
   try {
     const { status } = req.body;

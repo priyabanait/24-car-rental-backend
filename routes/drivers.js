@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
 router.get('/signup/credentials', async (req, res) => {
   try {
     // Fetch all driver signups from separate collection
-    const list = await DriverSignup.find().select('username mobile password status kycStatus signupDate').lean();
+    const list = await DriverSignup.find().select('driverToken username mobile password status kycStatus signupDate isVerified').lean();
     res.json(list);
   } catch (error) {
     console.error('Error fetching signup credentials:', error);
