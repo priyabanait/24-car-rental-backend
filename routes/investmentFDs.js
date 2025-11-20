@@ -7,7 +7,12 @@ const router = express.Router();
 // GET all investment FDs
 router.get('/', async (req, res) => {
   try {
-    const investments = await InvestmentFD.find().sort({ investmentDate: -1 });
+    const { investorId } = req.query;
+    
+    // If investorId is provided, filter by it
+    const filter = investorId ? { investorId } : {};
+    
+    const investments = await InvestmentFD.find(filter).sort({ investmentDate: -1 });
     res.json(investments);
   } catch (error) {
     console.error('Error fetching investment FDs:', error);
@@ -33,6 +38,7 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const {
+      investorId,
       investorName,
       email,
       phone,
@@ -119,6 +125,7 @@ router.post('/', async (req, res) => {
       const maturityAmount = principal + (principal * rate * time);
 
       const newInvestment = new InvestmentFD({
+        investorId: investorId || null,
         investorName: investorName.trim(),
         email: email ? email.trim() : '',
         phone: phone.trim(),
