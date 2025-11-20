@@ -1,3 +1,7 @@
+import driverWalletRouter from './driverWallet.js';
+
+import driverWalletMessageRouter from './driverWalletMessage.js';
+
 import express from 'express';
 import authRouter from './auth.js';
 import driversRouter from './drivers.js';
@@ -29,7 +33,8 @@ import investmentFDsRouter from './investmentFDs.js';
 import paymentsRouter from './payments.js';
 
 const router = express.Router();
-
+router.use('/driver-wallet', driverWalletRouter);
+router.use('/driver-wallet-message', driverWalletMessageRouter);
 router.use('/auth', authRouter);
 router.use('/drivers', driversRouter);
 router.use('/drivers', driverAuthRouter);
