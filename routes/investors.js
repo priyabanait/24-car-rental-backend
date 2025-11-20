@@ -157,9 +157,108 @@ router.get('/signup/credentials', async (req, res) => {
   }
 });
 
-// POST - Create new investor
+// POST - Create new investor OR complete investor registration
 router.post('/', async (req, res) => {
   try {
+    // Check if this is a registration completion for an existing signup
+    const { investorId, phone } = req.body;
+    
+    if (investorId || phone) {
+      // This is a registration completion
+      let investorSignup;
+      
+      if (investorId) {
+        investorSignup = await InvestorSignup.findById(investorId);
+      } else if (phone) {
+        investorSignup = await InvestorSignup.findOne({ phone });
+      }
+      
+      if (!investorSignup) {
+        return res.status(404).json({ error: 'Investor not found' });
+      }
+
+      // Handle document uploads to Cloudinary
+      const documentFields = ['profilePhoto', 'aadharDocument', 'aadharDocumentBack', 'panDocument', 'bankDocument'];
+      const uploadedDocs = {};
+
+      for (const field of documentFields) {
+        if (req.body[field] && req.body[field].startsWith('data:')) {
+          try {
+            const result = await uploadToCloudinary(req.body[field], `investors/${investorSignup._id}/${field}`);
+            uploadedDocs[field] = result.secure_url;
+          } catch (uploadErr) {
+            console.error(`Failed to upload ${field}:`, uploadErr);
+          }
+        }
+      }
+
+      // Update registration data
+      const updateData = {
+        investorName: req.body.investorName || investorSignup.investorName,
+        email: req.body.email || investorSignup.email,
+        address: req.body.address,
+        city: req.body.city,
+        state: req.body.state,
+        pincode: req.body.pincode,
+        dateOfBirth: req.body.dateOfBirth,
+        aadharNumber: req.body.aadharNumber,
+        panNumber: req.body.panNumber,
+        bankName: req.body.bankName,
+        accountNumber: req.body.accountNumber,
+        ifscCode: req.body.ifscCode,
+        accountHolderName: req.body.accountHolderName,
+        accountBranchName: req.body.accountBranchName,
+        ...uploadedDocs,
+        registrationCompleted: true,
+        status: 'active'
+      };
+
+      // Remove base64 data to prevent large document size
+      documentFields.forEach(field => {
+        if (updateData[field]?.startsWith('data:')) {
+          delete updateData[field];
+        }
+      });
+
+      // Update the investor signup record
+      const updated = await InvestorSignup.findByIdAndUpdate(
+        investorSignup._id,
+        updateData,
+        { new: true, runValidators: true }
+      );
+
+      return res.json({
+        message: 'Registration completed successfully',
+        investor: {
+          id: updated._id,
+          investorName: updated.investorName,
+          email: updated.email,
+          phone: updated.phone,
+          registrationCompleted: updated.registrationCompleted,
+          address: updated.address,
+          city: updated.city,
+          state: updated.state,
+          pincode: updated.pincode,
+          dateOfBirth: updated.dateOfBirth,
+          aadharNumber: updated.aadharNumber,
+          panNumber: updated.panNumber,
+          bankName: updated.bankName,
+          accountNumber: updated.accountNumber,
+          ifscCode: updated.ifscCode,
+          accountHolderName: updated.accountHolderName,
+          accountBranchName: updated.accountBranchName,
+          profilePhoto: updated.profilePhoto,
+          aadharDocument: updated.aadharDocument,
+          aadharDocumentBack: updated.aadharDocumentBack,
+          panDocument: updated.panDocument,
+          bankDocument: updated.bankDocument,
+          status: updated.status,
+          kycStatus: updated.kycStatus
+        }
+      });
+    }
+
+    // Otherwise, this is a manual admin entry
     // Handle document uploads to Cloudinary
     const documentFields = ['profilePhoto', 'aadharDocument', 'aadharDocumentBack', 'panDocument', 'bankDocument'];
     const uploadedDocs = {};
