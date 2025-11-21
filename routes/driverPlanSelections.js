@@ -63,18 +63,17 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get driver's own plan selections
-router.get('/my-plans', authenticateDriver, async (req, res) => {
+// Get all plan selections by driver mobile number
+router.get('/by-mobile/:mobile', async (req, res) => {
   try {
-    const selections = await DriverPlanSelection.find({ 
-      driverSignupId: req.driver.id 
-    })
+    const mobile = req.params.mobile;
+    const selections = await DriverPlanSelection.find({ driverMobile: mobile })
       .sort({ selectedDate: -1 })
       .lean();
     res.json(selections);
   } catch (err) {
-    console.error('Get my plans error:', err);
-    res.status(500).json({ message: 'Failed to load your plans' });
+    console.error('Get plans by mobile error:', err);
+    res.status(500).json({ message: 'Failed to load plans for this mobile' });
   }
 });
 

@@ -39,7 +39,7 @@ const DriverSchema = new mongoose.Schema({
   panDocument: String,
   bankDocument: String,
   electricBillDocument: String,
-  status: String,
+  status: { type: String, default: 'inactive' },
   kycStatus: String,
   joinDate: String,
   lastActive: String,
