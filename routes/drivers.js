@@ -6,6 +6,40 @@ import DriverSignup from '../models/driverSignup.js';
 import { uploadToCloudinary } from '../lib/cloudinary.js';
 
 const router = express.Router();
+
+// Update a driver signup credential
+router.put('/signup/credentials/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updated = await DriverSignup.findByIdAndUpdate(
+      id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+    if (!updated) {
+      return res.status(404).json({ message: 'Driver signup not found' });
+    }
+    res.json(updated);
+  } catch (err) {
+    console.error('Error updating driver signup:', err);
+    res.status(400).json({ message: 'Failed to update driver signup', error: err.message });
+  }
+});
+
+// Delete a driver signup credential
+router.delete('/signup/credentials/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await DriverSignup.findByIdAndDelete(id);
+    if (!deleted) {
+      return res.status(404).json({ message: 'Driver signup not found' });
+    }
+    res.json({ message: 'Driver signup deleted', driver: deleted });
+  } catch (err) {
+    console.error('Error deleting driver signup:', err);
+    res.status(400).json({ message: 'Failed to delete driver signup', error: err.message });
+  }
+});
 // GET driver form data by mobile number
 router.get('/form/mobile/:phone', async (req, res) => {
   try {

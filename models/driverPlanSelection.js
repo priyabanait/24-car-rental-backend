@@ -1,6 +1,11 @@
 import mongoose from 'mongoose';
 
 const DriverPlanSelectionSchema = new mongoose.Schema({
+  vehicleId: {
+    type: Number,
+    required: false,
+    ref: 'Vehicle'
+  },
   driverSignupId: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'DriverSignup', 

@@ -1,3 +1,4 @@
+
 import express from 'express';
 import Investor from '../models/investor.js';
 import InvestorSignup from '../models/investorSignup.js';
@@ -16,6 +17,39 @@ router.get('/form/mobile/:phone', async (req, res) => {
     res.json({ investor });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch investor', message: error.message });
+  }
+});
+// Update an investor signup credential
+router.put('/signup/credentials/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updated = await InvestorSignup.findByIdAndUpdate(
+      id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+    if (!updated) {
+      return res.status(404).json({ message: 'Investor signup not found' });
+    }
+    res.json(updated);
+  } catch (err) {
+    console.error('Error updating investor signup:', err);
+    res.status(400).json({ message: 'Failed to update investor signup', error: err.message });
+  }
+});
+
+// Delete an investor signup credential
+router.delete('/signup/credentials/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await InvestorSignup.findByIdAndDelete(id);
+    if (!deleted) {
+      return res.status(404).json({ message: 'Investor signup not found' });
+    }
+    res.json({ message: 'Investor signup deleted', investor: deleted });
+  } catch (err) {
+    console.error('Error deleting investor signup:', err);
+    res.status(400).json({ message: 'Failed to delete investor signup', error: err.message });
   }
 });
 // GET investor form data by investor ID
