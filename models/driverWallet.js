@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const DriverWalletSchema = new mongoose.Schema({
   phone: { type: String, required: true },
   balance: { type: Number, default: 0 },
-  transactions: [
+transactions: [
     {
       amount: Number,
       description: String,

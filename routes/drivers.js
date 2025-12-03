@@ -113,12 +113,15 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Create driver with uploaded document URLs
+
+    // Add emergency contact relation and secondary phone
     const driverData = {
       id: nextId,
       ...fields,
       ...uploadedDocs,
-      isManualEntry: true // Mark as manually added by admin
+      isManualEntry: true,
+      emergencyRelation: fields.emergencyRelation || '',
+      emergencyPhoneSecondary: fields.emergencyPhoneSecondary || ''
     };
 
     // Remove base64 data to prevent large document size
@@ -164,10 +167,13 @@ router.put('/:id', async (req, res) => {
       }
     }
 
-    // Update driver data with uploaded document URLs
+
+    // Add emergency contact relation and secondary phone
     const updateData = {
       ...fields,
-      ...uploadedDocs
+      ...uploadedDocs,
+      emergencyRelation: fields.emergencyRelation || '',
+      emergencyPhoneSecondary: fields.emergencyPhoneSecondary || ''
     };
 
     // Remove base64 data to prevent large document size
