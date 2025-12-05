@@ -1,15 +1,220 @@
+
+// ...existing code...
+
+// PATCH: Update extraAmount and extraReason (Admin endpoint)
+
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import DriverPlanSelection from '../models/driverPlanSelection.js';
 import DriverSignup from '../models/driverSignup.js';
+import Driver from '../models/driver.js';
 import mongoose from 'mongoose';
 
 dotenv.config();
 
 const router = express.Router();
 const SECRET = process.env.JWT_SECRET || 'dev_secret';
+router.patch('/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid plan selection ID' });
+    }
+    const { extraAmount, extraReason, adjustmentAmount } = req.body;
+    const selection = await DriverPlanSelection.findById(id);
+    if (!selection) {
+      return res.status(404).json({ message: 'Plan selection not found' });
+    }
+    if (typeof extraAmount !== 'undefined') selection.extraAmount = extraAmount;
+    if (typeof extraReason !== 'undefined') selection.extraReason = extraReason;
+    if (typeof adjustmentAmount !== 'undefined') selection.adjustmentAmount = adjustmentAmount;
+    await selection.save();
+    res.json({ message: 'Extra/adjustment amount updated', selection });
+  } catch (err) {
+    console.error('PATCH /driver-plan-selections/:id error:', err);
+    res.status(500).json({ message: 'Failed to update extra amount/reason' });
+  }
+});
+// Get all driver payments for drivers managed by a specific manager
+import Vehicle from '../models/vehicle.js';
+router.get('/by-manager/:manager', async (req, res) => {
+  try {
+    const managerParam = req.params.manager?.trim();
+    console.log('Get payments by manager - manager param:', managerParam);
+    
+    if (!managerParam) {
+      return res.json([]);
+    }
 
+    // Build query for vehicles - manager can be ObjectId or name/username
+    let managerIdentifiers = [managerParam];
+    
+    // If param looks like ObjectId, try to fetch manager to get name/username
+    if (mongoose.Types.ObjectId.isValid(managerParam)) {
+      const Manager = (await import('../models/manager.js')).default;
+      const mgrDoc = await Manager.findById(managerParam).lean();
+      if (mgrDoc) {
+        console.log('Manager found:', mgrDoc.name || mgrDoc.username);
+        if (mgrDoc.name) managerIdentifiers.push(mgrDoc.name.trim());
+        if (mgrDoc.username) managerIdentifiers.push(mgrDoc.username.trim());
+        if (mgrDoc.email) managerIdentifiers.push(mgrDoc.email.trim());
+      } else {
+        console.log('Manager not found for ObjectId:', managerParam);
+      }
+    }
+
+    // Build query to match manager by ObjectId or name/username
+    // Try multiple formats since assignedManager is a String field
+    const vehicleQuery = {
+      $or: [
+        { assignedManager: managerParam }, // Direct ObjectId string match
+        { assignedManager: managerParam.toString() }, // Ensure it's a string
+        { assignedManager: { $in: managerIdentifiers.map(id => new RegExp(`^${id}$`, 'i')) } } // Name/username match
+      ]
+    };
+
+    console.log('Vehicle query:', JSON.stringify(vehicleQuery, null, 2));
+    console.log('Manager identifiers to search:', managerIdentifiers);
+
+    // Find all vehicles assigned to this manager
+    const vehicles = await Vehicle.find(vehicleQuery).lean();
+    console.log(`Found ${vehicles.length} vehicles for manager`);
+    
+    // Debug: log sample vehicles to see their structure
+    if (vehicles.length > 0) {
+      console.log('Sample vehicle:', {
+        vehicleId: vehicles[0].vehicleId,
+        assignedManager: vehicles[0].assignedManager,
+        assignedDriver: vehicles[0].assignedDriver,
+        managerType: typeof vehicles[0].assignedManager,
+        driverType: typeof vehicles[0].assignedDriver
+      });
+    }
+    
+    if (vehicles.length === 0) {
+      console.log('No vehicles found for manager, returning empty array');
+      // Try a simpler query to see if any vehicles exist with this manager in any format
+      const allVehicles = await Vehicle.find({ assignedManager: { $exists: true, $ne: '' } }).limit(5).lean();
+      console.log('Sample vehicles with managers:', allVehicles.map(v => ({
+        vehicleId: v.vehicleId,
+        assignedManager: v.assignedManager,
+        managerType: typeof v.assignedManager
+      })));
+      return res.json([]);
+    }
+
+    // Collect all assigned driver IDs (could be ObjectId strings or usernames/mobiles)
+    const assignedDriverIds = vehicles
+      .map(v => v.assignedDriver)
+      .filter(Boolean)
+      .map(id => id.toString().trim());
+
+    console.log('Assigned driver IDs from vehicles:', assignedDriverIds);
+    console.log('Total vehicles with drivers:', assignedDriverIds.length, 'out of', vehicles.length);
+
+    if (assignedDriverIds.length === 0) {
+      console.log('No assigned drivers found in vehicles, returning empty array');
+      return res.json([]);
+    }
+
+    // Convert valid ObjectIds to mongoose ObjectIds
+    const validObjectIds = assignedDriverIds
+      .filter(id => mongoose.Types.ObjectId.isValid(id))
+      .map(id => new mongoose.Types.ObjectId(id));
+
+    console.log('Valid ObjectIds:', validObjectIds.length);
+
+    // First, look up Driver documents (vehicles reference Driver collection)
+    const drivers = validObjectIds.length > 0 
+      ? await Driver.find({ _id: { $in: validObjectIds } }).lean()
+      : [];
+
+    console.log(`Found ${drivers.length} drivers from Driver collection`);
+
+    // Extract mobile numbers and usernames from Driver documents
+    const driverMobiles = drivers.map(d => d.mobile).filter(Boolean);
+    const driverUsernames = drivers.map(d => d.username).filter(Boolean);
+    const driverPhones = drivers.map(d => d.phone).filter(Boolean);
+    
+    console.log('Driver mobiles from Driver collection:', driverMobiles);
+    console.log('Driver usernames from Driver collection:', driverUsernames);
+
+    // Now look up DriverSignup documents by mobile/username (DriverSignup is used for payments)
+    const driverSignupQuery = {
+      $or: []
+    };
+    
+    if (driverMobiles.length > 0) {
+      driverSignupQuery.$or.push({ mobile: { $in: driverMobiles } });
+    }
+    if (driverUsernames.length > 0) {
+      driverSignupQuery.$or.push({ username: { $in: driverUsernames } });
+    }
+    if (driverPhones.length > 0) {
+      driverSignupQuery.$or.push({ phone: { $in: driverPhones } });
+    }
+
+    const driverSignups = driverSignupQuery.$or.length > 0
+      ? await DriverSignup.find(driverSignupQuery).lean()
+      : [];
+
+    console.log(`Found ${driverSignups.length} driver signups matching Driver records`);
+
+    // Collect all identifiers: ObjectIds, usernames, and mobiles
+    const driverSignupIds = driverSignups.map(d => d._id);
+    const signupUsernames = driverSignups.map(d => d.username).filter(Boolean);
+    const signupMobiles = driverSignups.map(d => d.mobile).filter(Boolean);
+    
+    console.log('DriverSignup IDs:', driverSignupIds);
+    console.log('DriverSignup usernames:', signupUsernames);
+    console.log('DriverSignup mobiles:', signupMobiles);
+    
+    // Combine all identifiers for payment matching
+    const allUsernames = [...new Set([...signupUsernames, ...driverUsernames, ...assignedDriverIds.filter(id => !mongoose.Types.ObjectId.isValid(id))])];
+    const allMobiles = [...new Set([...signupMobiles, ...driverMobiles, ...driverPhones, ...assignedDriverIds.filter(id => !mongoose.Types.ObjectId.isValid(id))])];
+
+    // Build query to find payments
+    const paymentQuery = {
+      $or: []
+    };
+
+    // Match by driverSignupId (most reliable)
+    if (driverSignupIds.length > 0) {
+      paymentQuery.$or.push({ driverSignupId: { $in: driverSignupIds } });
+    }
+
+    // Match by username (case-insensitive)
+    if (allUsernames.length > 0) {
+      paymentQuery.$or.push({ 
+        driverUsername: { $in: allUsernames.map(u => new RegExp(`^${u}$`, 'i')) } 
+      });
+    }
+
+    // Match by mobile
+    if (allMobiles.length > 0) {
+      paymentQuery.$or.push({ 
+        driverMobile: { $in: allMobiles.map(m => new RegExp(`^${m}$`, 'i')) } 
+      });
+    }
+
+    console.log('Payment query:', JSON.stringify(paymentQuery, null, 2));
+
+    if (paymentQuery.$or.length === 0) {
+      console.log('No payment query conditions, returning empty array');
+      return res.json([]);
+    }
+
+    // Find all driver payments for these drivers
+    const payments = await DriverPlanSelection.find(paymentQuery).lean();
+
+    console.log(`Found ${payments.length} payments for manager`);
+    res.json(payments);
+  } catch (err) {
+    console.error('Get payments by manager error:', err);
+    res.status(500).json({ message: 'Failed to load payments for manager', error: err.message });
+  }
+});
 // Middleware to verify driver JWT token
 const authenticateDriver = (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -46,17 +251,18 @@ router.get('/', async (req, res) => {
         const slab = s.selectedRentSlab || {};
         return s.planType === 'weekly' ? (slab.accidentalCover || 105) : 0;
       })();
-      const total = s.calculatedTotal || (deposit + rent + cover);
-      
+      const extraAmount = s.extraAmount || 0;
+      const total = s.calculatedTotal || (deposit + rent + cover + extraAmount);
       return {
         ...s,
         calculatedDeposit: deposit,
         calculatedRent: rent,
         calculatedCover: cover,
-        calculatedTotal: total
+        extraAmount,
+        calculatedTotal: total,
+        extraReason: s.extraReason || ''
       };
     });
-    
     res.json(selectionsWithBreakdown);
   } catch (err) {
     console.error('Get plan selections error:', err);
@@ -89,45 +295,60 @@ router.get('/:id', async (req, res) => {
     if (!selection) {
       return res.status(404).json({ message: 'Plan selection not found' });
     }
-    // ...existing code...
-    let dailyRentSummary = null;
-    try {
-      if (selection.rentStartDate) {
-        const rentPerDay = selection.rentPerDay || (selection.selectedRentSlab?.rentDay || 0) || 0;
-        const start = new Date(selection.rentStartDate);
-        const toYmd = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-        let cur = toYmd(start);
-        const end = toYmd(new Date());
-        let totalDays = 0;
-        while (cur <= end) {
-          totalDays += 1;
-          cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
-          if (totalDays > 3660) break;
-        }
-        dailyRentSummary = {
-          hasStarted: true,
-          totalDays,
-          rentPerDay,
-          totalDue: rentPerDay * totalDays,
-          startDate: selection.rentStartDate
-        };
+    // Calculation logic
+    let days = 0;
+    if (selection.rentStartDate) {
+      const start = new Date(selection.rentStartDate);
+      let end = new Date();
+      if (selection.status === 'inactive' && selection.rentPausedDate) {
+        end = new Date(selection.rentPausedDate);
       }
-    } catch (e) {
-      console.warn('Failed to compute dailyRentSummary:', e.message);
+      // Normalize to midnight for both dates
+      const startMidnight = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+      const endMidnight = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+      days = Math.floor((endMidnight - startMidnight) / (1000 * 60 * 60 * 24)) + 1;
+      days = Math.max(1, days);
     }
-
+    const rentPerDay = selection.rentPerDay || (selection.selectedRentSlab?.rentDay || 0) || 0;
+    const accidentalCover = selection.planType === 'weekly' ? (selection.calculatedCover || (selection.selectedRentSlab?.accidentalCover || 105)) : 0;
+    let depositDue = 0;
+    if (selection.paymentType === 'security') {
+      depositDue = Math.max(0, (selection.securityDeposit || 0) - (selection.paidAmount || 0));
+    } else {
+      depositDue = selection.securityDeposit || 0;
+    }
+    let rentDue = 0;
+    if (selection.paymentType === 'rent') {
+      rentDue = Math.max(0, (days * rentPerDay) - (selection.paidAmount || 0));
+    } else {
+      rentDue = days * rentPerDay;
+    }
+    const extraAmount = selection.extraAmount || 0;
+    const extraReason = selection.extraReason || '';
+    const totalAmount = depositDue + rentDue + accidentalCover + extraAmount;
+    let dailyRentSummary = null;
+    if (selection.rentStartDate) {
+      dailyRentSummary = {
+        hasStarted: true,
+        totalDays: days,
+        rentPerDay,
+        totalDue: rentDue,
+        startDate: selection.rentStartDate
+      };
+    }
     const response = {
       ...selection,
       paymentBreakdown: {
-        securityDeposit: deposit,
-        rent: rent,
+        securityDeposit: selection.securityDeposit || 0,
+        rent: rentDue,
         rentType: selection.planType === 'weekly' ? 'weeklyRent' : 'dailyRent',
-        accidentalCover: cover,
-        totalAmount: totalAmount
+        accidentalCover,
+        extraAmount,
+        extraReason,
+        totalAmount
       },
       dailyRentSummary
     };
-    
     res.json(response);
   } catch (err) {
     console.error('Get plan selection error:', err);

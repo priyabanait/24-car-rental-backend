@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 4000;
 // ✅ Allow frontend devices (update origin if needed)
 app.use(cors({
   origin: "*", // or "http://192.168.1.57:3000" for your frontend
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
 }));
 
 app.use(express.json({ limit: '50mb' }));

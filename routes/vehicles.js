@@ -102,6 +102,7 @@ router.get('/search', async (req, res) => {
       status,
       kycStatus,
       assignedDriver,
+      assignedManager,
       minYear,
       maxYear
     } = req.query;
@@ -136,6 +137,7 @@ router.get('/search', async (req, res) => {
     if (status) filter.status = status;
     if (kycStatus) filter.kycStatus = kycStatus;
     if (assignedDriver) filter.assignedDriver = new RegExp(assignedDriver, 'i');
+    if (assignedManager) filter.assignedManager = new RegExp(assignedManager, 'i');
 
     // Year range filter
     if (minYear || maxYear) {
@@ -331,12 +333,18 @@ router.put('/:id', async (req, res) => {
     }
 
 
-    // If assignedDriver is being set and not empty, set rentStartDate if not already set
     let existing = await Vehicle.findOne({ vehicleId });
-    if (updates.assignedDriver && updates.assignedDriver !== '') {
-      if (existing && !existing.rentStartDate) {
-        updates.rentStartDate = new Date();
-      }
+    // If status is being set to active and rentStartDate is not set, start counting days
+    if (updates.status === 'active' && (!existing || !existing.rentStartDate)) {
+      updates.rentStartDate = new Date();
+    }
+    // If status is being set to inactive and was active, pause counting days
+    if (updates.status === 'inactive' && existing && existing.status === 'active') {
+      updates.rentPausedDate = new Date();
+    }
+    // If status is being set to active, clear rentPausedDate
+    if (updates.status === 'active') {
+      updates.rentPausedDate = null;
     }
 
     // If status is being set to inactive, store rentPausedDate

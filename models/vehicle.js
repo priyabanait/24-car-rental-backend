@@ -55,6 +55,10 @@ const VehicleSchema = new mongoose.Schema({
   trafficFineDate: String,
   fuelType: String,
   assignedDriver: String,
+  assignedManager: {
+    type: String,
+    default: ''
+  },
   rentStartDate: Date,
   rentPausedDate: Date,
   kycStatus: {
