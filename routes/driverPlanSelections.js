@@ -21,14 +21,25 @@ router.patch('/:id', async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Invalid plan selection ID' });
     }
-    const { extraAmount, extraReason, adjustmentAmount } = req.body;
+    const { extraAmount, extraReason, adjustmentAmount, adjustmentReason } = req.body;
     const selection = await DriverPlanSelection.findById(id);
     if (!selection) {
       return res.status(404).json({ message: 'Plan selection not found' });
     }
     if (typeof extraAmount !== 'undefined') selection.extraAmount = extraAmount;
     if (typeof extraReason !== 'undefined') selection.extraReason = extraReason;
-    if (typeof adjustmentAmount !== 'undefined') selection.adjustmentAmount = adjustmentAmount;
+    // Make adjustment amount cumulative (add to existing instead of replacing)
+    if (typeof adjustmentAmount !== 'undefined') {
+      const currentAdjustment = selection.adjustmentAmount || 0;
+      selection.adjustmentAmount = currentAdjustment + adjustmentAmount;
+      // Append new reason to existing reasons
+      if (adjustmentReason) {
+        const existingReason = selection.adjustmentReason || '';
+        selection.adjustmentReason = existingReason 
+          ? `${existingReason} | ${adjustmentReason}` 
+          : adjustmentReason;
+      }
+    }
     await selection.save();
     res.json({ message: 'Extra/adjustment amount updated', selection });
   } catch (err) {
@@ -47,20 +58,32 @@ router.get('/by-manager/:manager', async (req, res) => {
       return res.json([]);
     }
 
-    // Build query for vehicles - manager can be ObjectId or name/username
+    // Build query for vehicles - manager can be ObjectId, email, name or username
     let managerIdentifiers = [managerParam];
+    const Manager = (await import('../models/manager.js')).default;
     
-    // If param looks like ObjectId, try to fetch manager to get name/username
+    // If param looks like ObjectId, try to fetch manager by ID
     if (mongoose.Types.ObjectId.isValid(managerParam)) {
-      const Manager = (await import('../models/manager.js')).default;
       const mgrDoc = await Manager.findById(managerParam).lean();
       if (mgrDoc) {
-        console.log('Manager found:', mgrDoc.name || mgrDoc.username);
+        console.log('Manager found by ID:', mgrDoc.name || mgrDoc.username);
         if (mgrDoc.name) managerIdentifiers.push(mgrDoc.name.trim());
         if (mgrDoc.username) managerIdentifiers.push(mgrDoc.username.trim());
         if (mgrDoc.email) managerIdentifiers.push(mgrDoc.email.trim());
       } else {
         console.log('Manager not found for ObjectId:', managerParam);
+      }
+    } 
+    // If param looks like email, try to fetch manager by email
+    else if (managerParam.includes('@')) {
+      const mgrDoc = await Manager.findOne({ email: managerParam }).lean();
+      if (mgrDoc) {
+        console.log('Manager found by email:', mgrDoc.name || mgrDoc.username);
+        if (mgrDoc._id) managerIdentifiers.push(mgrDoc._id.toString());
+        if (mgrDoc.name) managerIdentifiers.push(mgrDoc.name.trim());
+        if (mgrDoc.username) managerIdentifiers.push(mgrDoc.username.trim());
+      } else {
+        console.log('Manager not found for email:', managerParam);
       }
     }
 
@@ -236,8 +259,18 @@ const authenticateDriver = (req, res, next) => {
 // Get all driver plan selections (Admin view)
 router.get('/', async (req, res) => {
   try {
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'selectedDate';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    const total = await DriverPlanSelection.countDocuments();
     const selections = await DriverPlanSelection.find()
-      .sort({ selectedDate: -1 })
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit)
       .lean();
     
     // Ensure all selections have calculated values
@@ -263,7 +296,17 @@ router.get('/', async (req, res) => {
         extraReason: s.extraReason || ''
       };
     });
-    res.json(selectionsWithBreakdown);
+    
+    res.json({
+      data: selectionsWithBreakdown,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
+      }
+    });
   } catch (err) {
     console.error('Get plan selections error:', err);
     res.status(500).json({ message: 'Failed to load plan selections' });

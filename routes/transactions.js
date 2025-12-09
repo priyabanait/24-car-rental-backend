@@ -5,29 +5,64 @@ import { authenticateToken } from './middleware.js';
 const router = express.Router();
 
 router.get('/', async (req, res) => {
-  const list = await Transaction.find().lean();
-  
-  // Calculate total amount if requested
-  if (req.query.include === 'summary') {
-    const totalAmount = list.reduce((sum, t) => sum + (t.amount || 0), 0);
-    const completedAmount = list.filter(t => t.status === 'completed').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const pendingAmount = list.filter(t => t.status === 'pending').reduce((sum, t) => sum + (t.amount || 0), 0);
+  try {
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    const total = await Transaction.countDocuments();
+    const list = await Transaction.find()
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit)
+      .lean();
     
-    return res.json({
-      transactions: list,
-      summary: {
-        total: list.length,
-        totalAmount,
-        completedAmount,
-        pendingAmount,
-        completedCount: list.filter(t => t.status === 'completed').length,
-        pendingCount: list.filter(t => t.status === 'pending').length,
-        failedCount: list.filter(t => t.status === 'failed').length
+    // Calculate total amount if requested
+    if (req.query.include === 'summary') {
+      // Get all transactions for summary calculations
+      const allTransactions = await Transaction.find().lean();
+      const totalAmount = allTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+      const completedAmount = allTransactions.filter(t => t.status === 'completed').reduce((sum, t) => sum + (t.amount || 0), 0);
+      const pendingAmount = allTransactions.filter(t => t.status === 'pending').reduce((sum, t) => sum + (t.amount || 0), 0);
+      
+      return res.json({
+        data: list,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+          hasMore: page * limit < total
+        },
+        summary: {
+          total: allTransactions.length,
+          totalAmount,
+          completedAmount,
+          pendingAmount,
+          completedCount: allTransactions.filter(t => t.status === 'completed').length,
+          pendingCount: allTransactions.filter(t => t.status === 'pending').length,
+          failedCount: allTransactions.filter(t => t.status === 'failed').length
+        }
+      });
+    }
+    
+    res.json({
+      data: list,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
       }
     });
+  } catch (error) {
+    console.error('Error fetching transactions:', error);
+    res.status(500).json({ message: 'Failed to fetch transactions', error: error.message });
   }
-  
-  res.json(list);
 });
 
 router.get('/:id', async (req, res) => {

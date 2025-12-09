@@ -1,6 +1,36 @@
+
 import express from 'express';
 import Manager from '../models/manager.js';
+import jwt from 'jsonwebtoken';
+import dotenv from 'dotenv';
+dotenv.config();
 const router = express.Router();
+
+const SECRET = process.env.JWT_SECRET || 'dev_secret';
+// Manager login endpoint
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const manager = await Manager.findOne({ email, password }).lean();
+    if (!manager) return res.status(401).json({ message: 'Invalid credentials' });
+
+    // Import permissions for fleet manager role
+    const { ROLES } = await import('../../src/utils/permissions.js');
+    const permissions = ROLES.FLEET_MANAGER.permissions;
+
+    const payload = {
+      id: manager._id,
+      email: manager.email,
+      name: manager.name,
+      role: 'fleet_manager',
+      permissions
+    };
+    const token = jwt.sign(payload, SECRET, { expiresIn: '8h' });
+    res.json({ user: payload, token });
+  } catch (err) {
+    res.status(500).json({ message: 'Login failed' });
+  }
+});
 
 // Create a new manager
 router.post('/', async (req, res) => {
@@ -32,8 +62,29 @@ router.post('/', async (req, res) => {
 // Get all managers
 router.get('/', async (req, res) => {
   try {
-    const managers = await Manager.find();
-    res.json(managers);
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    const total = await Manager.countDocuments();
+    const managers = await Manager.find()
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit);
+    
+    res.json({
+      data: managers,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
+      }
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

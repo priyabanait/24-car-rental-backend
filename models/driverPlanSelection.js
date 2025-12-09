@@ -65,7 +65,8 @@ const DriverPlanSelectionSchema = new mongoose.Schema({
   calculatedTotal: { type: Number, default: 0 },
   extraAmount: { type: Number, default: 0 },
   extraReason: { type: String, default: '' },
-  adjustmentAmount: { type: Number, default: 0 }
+  adjustmentAmount: { type: Number, default: 0 },
+  adjustmentReason: { type: String, default: '' }
 }, { timestamps: true });
 
 // Index for faster queries

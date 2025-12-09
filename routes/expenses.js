@@ -29,8 +29,35 @@ router.get('/categories', async (req, res) => {
 
 // List expenses
 router.get('/', async (req, res) => {
-  const list = await Expense.find().lean();
-  res.json(list);
+  try {
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    const total = await Expense.countDocuments();
+    const list = await Expense.find()
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    res.json({
+      data: list,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching expenses:', error);
+    res.status(500).json({ message: 'Failed to fetch expenses', error: error.message });
+  }
 });
 
 // Get expense by id

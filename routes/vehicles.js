@@ -30,6 +30,7 @@ function normalizeVehicleShape(v) {
     carName: '',
     color: '',
     fuelType: '',
+    investorId: v?.investorId ?? null,
     ownerName: '',
     ownerPhone: '',
     year: null,
@@ -159,7 +160,7 @@ router.get('/search', async (req, res) => {
 router.get('/investor/:investorId', async (req, res) => {
   try {
     const { investorId } = req.params;
-    const vehicles = await Vehicle.find({ investorId }).lean();
+    const vehicles = await Vehicle.find({ investorId }).populate('investorId', 'investorName phone email').lean();
     res.json(vehicles.map(normalizeVehicleShape));
   } catch (err) {
     console.error('Error fetching vehicles for investor:', err);
@@ -170,8 +171,61 @@ router.get('/investor/:investorId', async (req, res) => {
 // Get all vehicles
 router.get('/', async (req, res) => {
   try {
-    const list = await Vehicle.find().lean();
-    res.json(list.map(normalizeVehicleShape));
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'vehicleId';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    const total = await Vehicle.countDocuments();
+    const list = await Vehicle.find()
+      .populate('investorId', 'investorName phone email')
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    // Calculate months and cumulative payout for each vehicle
+    const enhancedList = list.map(vehicle => {
+      const normalized = normalizeVehicleShape(vehicle);
+      const status = normalized.status || 'inactive';
+      let calculatedMonths = 0;
+      let cumulativePayout = 0;
+      
+      // Calculate months from rentPeriods if vehicle is active
+      if (Array.isArray(normalized.rentPeriods) && normalized.rentPeriods.length > 0 && status === 'active') {
+        normalized.rentPeriods.forEach(period => {
+          const start = new Date(period.start);
+          const end = period.end ? new Date(period.end) : new Date();
+          const diffDays = Math.floor((end - start) / (1000 * 60 * 60 * 24));
+          calculatedMonths += Math.floor(diffDays / 30) + 1;
+        });
+      }
+      
+      // Calculate cumulative payout (monthlyProfitMin * months)
+      const monthlyProfitMin = normalized.monthlyProfitMin || 0;
+      cumulativePayout = monthlyProfitMin * calculatedMonths;
+      
+      return {
+        ...normalized,
+        calculatedMonths,
+        cumulativePayout,
+        isActive: status === 'active',
+        hasRentPeriods: Array.isArray(normalized.rentPeriods) && normalized.rentPeriods.length > 0
+      };
+    });
+    
+    res.json({
+      data: enhancedList,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
+      }
+    });
   } catch (err) {
     console.error('Error fetching vehicles:', err);
     res.status(500).json({ message: 'Failed to fetch vehicles' });
@@ -182,7 +236,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const vehicleId = Number(req.params.id);
-    const vehicle = await Vehicle.findOne({ vehicleId }).lean();
+    const vehicle = await Vehicle.findOne({ vehicleId }).populate('investorId', 'investorName phone email').lean();
     if (!vehicle) {
       return res.status(404).json({ message: 'Vehicle not found' });
     }
@@ -211,12 +265,22 @@ router.post('/', async (req, res) => {
     vehicleData.registrationNumber = (vehicleData.registrationNumber || '').toString().trim();
     if (vehicleData.year != null) vehicleData.year = Number(vehicleData.year);
     if (vehicleData.trafficFine != null) vehicleData.trafficFine = Number(vehicleData.trafficFine);
+    
+    // Handle investorId - convert to ObjectId if provided
+    if (vehicleData.investorId) {
+      const mongoose = await import('mongoose');
+      if (mongoose.default.Types.ObjectId.isValid(vehicleData.investorId)) {
+        vehicleData.investorId = new mongoose.default.Types.ObjectId(vehicleData.investorId);
+      } else {
+        delete vehicleData.investorId; // Invalid ObjectId, remove it
+      }
+    }
 
-    // Normalize category and carCategory to match investment entry names
+    // Normalize category and carCategory to match investment entry carnames
     try {
       const CarInvestmentEntry = (await import('../models/carInvestmentEntry.js')).default;
       const entries = await CarInvestmentEntry.find();
-      const entryNames = entries.map(e => e.name.trim().toLowerCase());
+      const entryNames = entries.map(e => (e.carname || '').trim().toLowerCase());
       let cat = (vehicleData.category || '').trim().toLowerCase();
       let carCat = (vehicleData.carCategory || '').trim().toLowerCase();
       let match = entryNames.find(name => name === cat) || entryNames.find(name => name === carCat);
@@ -232,15 +296,29 @@ router.post('/', async (req, res) => {
       console.error('Error normalizing category:', err);
     }
 
-    // Calculate monthlyProfitMin from car investment entry
+    // Calculate monthlyProfitMin from car investment entry by matching category with carname
     try {
       const CarInvestmentEntry = (await import('../models/carInvestmentEntry.js')).default;
-      const category = (vehicleData.category || vehicleData.carCategory || '').toLowerCase();
-      const matchedInvestment = await CarInvestmentEntry.findOne({ name: new RegExp(`^${category}$`, 'i') });
+      const category = (vehicleData.category || vehicleData.carCategory || '').trim().toLowerCase();
+      
+      // Find matching car investment entry by carname (not by name field)
+      let matchedInvestment = await CarInvestmentEntry.findOne({ 
+        carname: new RegExp(`^${category}$`, 'i') 
+      });
+      
+      // If investorId is provided, try to find investor-specific entry first
+      if (vehicleData.investorId) {
+        const investorSpecificEntry = await CarInvestmentEntry.findOne({
+          carname: new RegExp(`^${category}$`, 'i'),
+          investorId: vehicleData.investorId
+        });
+        if (investorSpecificEntry) {
+          matchedInvestment = investorSpecificEntry;
+        }
+      }
+      
       if (matchedInvestment) {
-        const minAmount = parseFloat(matchedInvestment.minAmount || 0);
-        const expectedROI = parseFloat(matchedInvestment.expectedROI || 0);
-        vehicleData.monthlyProfitMin = minAmount * (expectedROI / 100) / 12;
+        vehicleData.monthlyProfitMin = parseFloat(matchedInvestment.finalMonthlyPayout || matchedInvestment.MonthlyPayout || 0);
       }
     } catch (err) {
       console.error('Error calculating monthlyProfitMin:', err);
@@ -326,12 +404,22 @@ router.put('/:id', async (req, res) => {
     if (updates.registrationNumber) updates.registrationNumber = String(updates.registrationNumber).trim();
     if (updates.year != null) updates.year = Number(updates.year);
     if (updates.trafficFine != null) updates.trafficFine = Number(updates.trafficFine);
+    
+    // Handle investorId - convert to ObjectId if provided
+    if (updates.investorId) {
+      const mongoose = await import('mongoose');
+      if (mongoose.default.Types.ObjectId.isValid(updates.investorId)) {
+        updates.investorId = new mongoose.default.Types.ObjectId(updates.investorId);
+      } else {
+        delete updates.investorId; // Invalid ObjectId, remove it
+      }
+    }
 
-    // Normalize category and carCategory to match investment entry names
+    // Normalize category and carCategory to match investment entry carnames
     try {
       const CarInvestmentEntry = (await import('../models/carInvestmentEntry.js')).default;
       const entries = await CarInvestmentEntry.find();
-      const entryNames = entries.map(e => e.name.trim().toLowerCase());
+      const entryNames = entries.map(e => (e.carname || '').trim().toLowerCase());
       let cat = (updates.category || '').trim().toLowerCase();
       let carCat = (updates.carCategory || '').trim().toLowerCase();
       let match = entryNames.find(name => name === cat) || entryNames.find(name => name === carCat);
@@ -350,12 +438,28 @@ router.put('/:id', async (req, res) => {
     // Calculate monthlyProfitMin from car investment entry on update
     try {
       const CarInvestmentEntry = (await import('../models/carInvestmentEntry.js')).default;
-      const category = (updates.category || updates.carCategory || existing?.category || existing?.carCategory || '').toLowerCase();
-      const matchedInvestment = await CarInvestmentEntry.findOne({ name: new RegExp(`^${category}$`, 'i') });
+      const existing = await Vehicle.findOne({ vehicleId });
+      const category = (updates.category || updates.carCategory || existing?.category || existing?.carCategory || '').trim().toLowerCase();
+      
+      // Find matching car investment entry by carname
+      let matchedInvestment = await CarInvestmentEntry.findOne({ 
+        carname: new RegExp(`^${category}$`, 'i') 
+      });
+      
+      // If investorId is provided or exists, try to find investor-specific entry first
+      const investorId = updates.investorId || existing?.investorId;
+      if (investorId) {
+        const investorSpecificEntry = await CarInvestmentEntry.findOne({
+          carname: new RegExp(`^${category}$`, 'i'),
+          investorId: investorId
+        });
+        if (investorSpecificEntry) {
+          matchedInvestment = investorSpecificEntry;
+        }
+      }
+      
       if (matchedInvestment) {
-        const minAmount = parseFloat(matchedInvestment.minAmount || 0);
-        const expectedROI = parseFloat(matchedInvestment.expectedROI || 0);
-        updates.monthlyProfitMin = minAmount * (expectedROI / 100) / 12;
+        updates.monthlyProfitMin = parseFloat(matchedInvestment.finalMonthlyPayout || matchedInvestment.MonthlyPayout || 0);
       }
     } catch (err) {
       console.error('Error calculating monthlyProfitMin:', err);
@@ -406,23 +510,17 @@ router.put('/:id', async (req, res) => {
     if (!existing.rentPeriods) existing.rentPeriods = [];
     // If status is being set to active
     if (updates.status === 'active') {
-      // If last period is closed or no periods, start a new one
-      const lastPeriod = existing.rentPeriods[existing.rentPeriods.length - 1];
-      if (!lastPeriod || lastPeriod.end) {
-        existing.rentPeriods.push({ start: new Date(), end: null });
-      }
+      // Clear any previous periods and start fresh
+      existing.rentPeriods = [{ start: new Date(), end: null }];
       updates.rentPeriods = existing.rentPeriods;
       updates.rentStartDate = new Date();
       updates.rentPausedDate = null;
     }
-    // If status is being set to inactive and was active, close current period
-    if (updates.status === 'inactive' && existing && existing.status === 'active') {
-      const lastPeriod = existing.rentPeriods[existing.rentPeriods.length - 1];
-      if (lastPeriod && !lastPeriod.end) {
-        lastPeriod.end = new Date();
-      }
-      updates.rentPeriods = existing.rentPeriods;
+    // If status is being set to inactive, clear all rent periods
+    if (updates.status === 'inactive' || updates.status === 'suspended') {
+      updates.rentPeriods = [];
       updates.rentPausedDate = new Date();
+      updates.rentStartDate = null;
     }
 
     // KYC status activation logic

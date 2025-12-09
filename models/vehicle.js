@@ -27,7 +27,7 @@ const VehicleSchema = new mongoose.Schema({
   investorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Investor',
-    required: true
+    required: false
   },
   registrationNumber: {
     type: String,

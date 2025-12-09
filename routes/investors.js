@@ -203,14 +203,36 @@ router.post('/login-otp', async (req, res) => {
 // GET all investors (only manual entries for admin panel)
 router.get('/', async (req, res) => {
   try {
-    // Fetch all investors (manual and self-registered)
-    const list = await Investor.find().lean();
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    const total = await Investor.countDocuments();
+    const list = await Investor.find()
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
     // Transform _id to id for frontend compatibility
     const transformedList = list.map(investor => ({
       ...investor,
       id: investor._id.toString()
     }));
-    res.json(transformedList);
+    
+    res.json({
+      data: transformedList,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
+      }
+    });
   } catch (error) {
     console.error('Error fetching investors:', error);
     res.status(500).json({ error: 'Failed to fetch investors', message: error.message });
@@ -220,9 +242,31 @@ router.get('/', async (req, res) => {
 // GET investor signup credentials (self-registered)
 router.get('/signup/credentials', async (req, res) => {
   try {
-    // Fetch all investor signups from separate collection
-    const list = await InvestorSignup.find().select('investorName email phone password status kycStatus signupDate').lean();
-    res.json(list);
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'signupDate';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    const total = await InvestorSignup.countDocuments();
+    const list = await InvestorSignup.find()
+      .select('investorName email phone password status kycStatus signupDate')
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    res.json({
+      data: list,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
+      }
+    });
   } catch (error) {
     console.error('Error fetching investor signup credentials:', error);
     res.status(500).json({ error: 'Failed to fetch signup credentials', message: error.message });

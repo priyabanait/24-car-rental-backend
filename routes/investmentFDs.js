@@ -9,11 +9,32 @@ router.get('/', async (req, res) => {
   try {
     const { investorId } = req.query;
     
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'investmentDate';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+    
     // If investorId is provided, filter by it
     const filter = investorId ? { investorId } : {};
     
-    const investments = await InvestmentFD.find(filter).sort({ investmentDate: -1 });
-    res.json(investments);
+    const total = await InvestmentFD.countDocuments(filter);
+    const investments = await InvestmentFD.find(filter)
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit);
+    
+    res.json({
+      data: investments,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
+      }
+    });
   } catch (error) {
     console.error('Error fetching investment FDs:', error);
     res.status(500).json({ error: 'Failed to fetch investment FDs', message: error.message });
@@ -118,11 +139,12 @@ router.post('/', async (req, res) => {
     }
 
     // Create new investment FD
-      // Calculate maturity amount (simple interest)
+      // Calculate maturity amount (compound interest)
       const principal = parseFloat(investmentAmount);
       const rate = parseFloat(investmentRate) / 100;
+      const n = fdType === 'monthly' ? 12 : 1; // compounding frequency
       const time = fdType === 'monthly' ? parseFloat(termMonths) / 12 : parseFloat(termYears);
-      const maturityAmount = principal + (principal * rate * time);
+      const maturityAmount = principal * Math.pow(1 + rate / n, n * time);
 
       const newInvestment = new InvestmentFD({
         investorId: investorId || null,
@@ -244,8 +266,9 @@ router.put('/:id', async (req, res) => {
     ) {
       const principal = investment.investmentAmount;
       const rate = investment.investmentRate / 100;
+      const n = investment.fdType === 'monthly' ? 12 : 1;
       const time = investment.fdType === 'monthly' ? (investment.termMonths || 0) / 12 : (investment.termYears || 0);
-      investment.maturityAmount = principal + (principal * rate * time);
+      investment.maturityAmount = principal * Math.pow(1 + rate / n, n * time);
     }
 
     // Update plan if provided

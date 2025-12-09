@@ -42,7 +42,7 @@ router.delete('/signup/credentials/:id', async (req, res) => {
 });
 // GET driver form data by mobile number
 router.get('/form/mobile/:phone', async (req, res) => {
-  try {
+try {
     const { phone } = req.params;
     const driver = await Driver.findOne({ phone }).lean();
     if (!driver) {
@@ -66,17 +66,68 @@ function stripAuthFields(source) {
 }
 
 router.get('/', async (req, res) => {
-  // Only fetch drivers added manually by admin (not self-registered)
-  const list = await Driver.find({ isManualEntry: true }).lean();
-  res.json(list);
+  try {
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    // Only fetch drivers added manually by admin (not self-registered)
+    const filter = { isManualEntry: true };
+    
+    const total = await Driver.countDocuments(filter);
+    const list = await Driver.find(filter)
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    res.json({
+      data: list,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching drivers:', error);
+    res.status(500).json({ message: 'Failed to fetch drivers', error: error.message });
+  }
 });
 
 // GET signup drivers (self-registered with username/mobile/password)
 router.get('/signup/credentials', async (req, res) => {
   try {
-    // Fetch all driver signups from separate collection
-    const list = await DriverSignup.find().select('username mobile password status kycStatus signupDate').lean();
-    res.json(list);
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'signupDate';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    const total = await DriverSignup.countDocuments();
+    const list = await DriverSignup.find()
+      .select('username mobile password status kycStatus signupDate')
+      .sort({ [sortBy]: sortOrder })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    res.json({
+      data: list,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total
+      }
+    });
   } catch (error) {
     console.error('Error fetching signup credentials:', error);
     res.status(500).json({ message: 'Failed to fetch signup credentials' });
