@@ -613,4 +613,39 @@ router.get('/fd-records/:id', async (req, res) => {
   }
 });
 
+// Forgot Password - Update password using phone number
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { phone, newPassword } = req.body;
+    
+    // Validate input
+    if (!phone || !newPassword) {
+      return res.status(400).json({ error: 'Phone number and new password required' });
+    }
+
+    // Find investor by phone number
+    const investorSignup = await InvestorSignup.findOne({ phone });
+    if (!investorSignup) {
+      return res.status(404).json({ error: 'Investor not found with this phone number' });
+    }
+
+    // Update password (plain text)
+    investorSignup.password = newPassword;
+    await investorSignup.save();
+
+    res.json({ 
+      message: 'Password updated successfully',
+      investor: {
+        id: investorSignup._id,
+        investorName: investorSignup.investorName,
+        email: investorSignup.email,
+        phone: investorSignup.phone
+      }
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Password reset failed', message: error.message });
+  }
+});
+
 export default router;

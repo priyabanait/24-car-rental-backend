@@ -43,6 +43,7 @@ router.use('/driver-wallet-message', driverWalletMessageRouter);
 router.use('/auth', authRouter);
 router.use('/drivers', driversRouter);
 router.use('/drivers', driverAuthRouter);
+router.use('/driver-auth', driverAuthRouter);
 router.use('/driver-plan-selections', driverPlanSelectionsRouter);
 router.use('/vehicles', vehiclesRouter);
 router.use('/vehicles-by-driver', vehiclesByDriverRouter);

@@ -212,4 +212,38 @@ router.post('/login-otp', async (req, res) => {
 	}
 });
 
+// Forgot Password - Update password using mobile number
+router.post('/forgot-password', async (req, res) => {
+	try {
+		const { mobile, newPassword } = req.body;
+		
+		// Validate input
+		if (!mobile || !newPassword) {
+			return res.status(400).json({ message: 'Mobile number and new password required.' });
+		}
+
+		// Find driver by mobile number
+		const driverSignup = await DriverSignup.findOne({ mobile });
+		if (!driverSignup) {
+			return res.status(404).json({ message: 'Driver not found with this mobile number.' });
+		}
+
+		// Update password (plain text)
+		driverSignup.password = newPassword;
+		await driverSignup.save();
+
+		return res.json({ 
+			message: 'Password updated successfully.',
+			driver: {
+				id: driverSignup._id,
+				username: driverSignup.username,
+				mobile: driverSignup.mobile
+			}
+		});
+	} catch (error) {
+		console.error('Forgot password error:', error);
+		return res.status(500).json({ message: 'Server error during password reset.' });
+	}
+});
+
 export default router;

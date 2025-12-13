@@ -412,7 +412,7 @@ router.get('/by-mobile/:mobile', async (req, res) => {
     // Ensure each selection includes a `paymentDetails` object (compute if missing)
     const selectionsWithDetails = selections.map(s => ({
       ...s,
-      paymentDetails: s.paymentDetails || calculatePaymentDetails(s)
+      paymentDetails: s.paymentDetails|| calculatePaymentDetails(s)
     }));
 
     res.json(selectionsWithDetails);
