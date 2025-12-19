@@ -67,16 +67,20 @@ router.post('/signup', async (req, res) => {
 	}
 });
 
-// Login (username/password)
+// Login (username/password or mobile/password)
 router.post('/login', async (req, res) => {
 	try {
-		const { username, password } = req.body;
-		if (!username || !password) {
-			return res.status(400).json({ message: 'Username and password required.' });
+		const { username, mobile, password } = req.body;
+		
+		// Check if either username or mobile is provided along with password
+		if ((!username && !mobile) || !password) {
+			return res.status(400).json({ message: 'Username or mobile, and password are required.' });
 		}
 
-		// Find driver signup by username
-		const driverSignup = await DriverSignup.findOne({ username });
+		// Find driver signup by username or mobile
+		const query = username ? { username } : { mobile };
+		const driverSignup = await DriverSignup.findOne(query);
+		
 		if (!driverSignup) {
 			return res.status(401).json({ message: 'Invalid credentials.' });
 		}
@@ -243,6 +247,47 @@ router.post('/forgot-password', async (req, res) => {
 	} catch (error) {
 		console.error('Forgot password error:', error);
 		return res.status(500).json({ message: 'Server error during password reset.' });
+	}
+});
+
+// Complete driver registration
+router.put('/complete-registration/:id', async (req, res) => {
+	try {
+		const { id } = req.params;
+		const registrationData = req.body;
+		
+		// Find driver signup
+		const driverSignup = await DriverSignup.findById(id);
+		if (!driverSignup) {
+			return res.status(404).json({ message: 'Driver not found.' });
+		}
+
+		// Update all registration fields
+		Object.keys(registrationData).forEach(key => {
+			if (registrationData[key] !== undefined && registrationData[key] !== null) {
+				driverSignup[key] = registrationData[key];
+			}
+		});
+
+		// Mark registration as completed
+		driverSignup.registrationCompleted = true;
+		driverSignup.status = 'pending'; // Set to pending for admin approval
+		driverSignup.kycStatus = 'pending';
+
+		await driverSignup.save();
+
+		return res.json({ 
+			message: 'Registration completed successfully. Your profile is under review.',
+			driver: {
+				id: driverSignup._id,
+				username: driverSignup.username,
+				mobile: driverSignup.mobile,
+				registrationCompleted: driverSignup.registrationCompleted
+			}
+		});
+	} catch (error) {
+		console.error('Complete registration error:', error);
+		return res.status(500).json({ message: 'Server error during registration completion.' });
 	}
 });
 

@@ -54,6 +54,27 @@ const VehicleSchema = new mongoose.Schema({
   trafficFine: Number,
   trafficFineDate: String,
   fuelType: String,
+  seatingCapacity: {
+    type: Number,
+    enum: [2, 4, 5, 7, 8],
+    default: 5
+  },
+  pricePerDay: {
+    type: Number,
+    default: 0
+  },
+  securityDeposit: {
+    type: Number,
+    default: 0
+  },
+  city: {
+    type: String,
+    trim: true
+  },
+  location: {
+    type: String,
+    trim: true
+  },
   assignedDriver: String,
   assignedManager: {
     type: String,
@@ -96,6 +117,12 @@ const VehicleSchema = new mongoose.Schema({
   carRightPhoto: String,
   carBackPhoto: String,
   carFullPhoto: String,
+  
+  // Features
+  features: {
+    type: [String],
+    default: []
+  },
   
   // Additional fields
   make: String,

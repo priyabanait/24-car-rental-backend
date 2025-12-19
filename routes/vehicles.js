@@ -30,6 +30,11 @@ function normalizeVehicleShape(v) {
     carName: '',
     color: '',
     fuelType: '',
+    seatingCapacity: v?.seatingCapacity ?? 5,
+    pricePerDay: v?.pricePerDay ?? 0,
+    securityDeposit: v?.securityDeposit ?? 0,
+    city: v?.city ?? '',
+    location: v?.location ?? '',
     investorId: v?.investorId ?? null,
     ownerName: '',
     ownerPhone: '',
@@ -73,6 +78,9 @@ function normalizeVehicleShape(v) {
     carBackPhoto: null,
     carFullPhoto: null,
 
+    // features
+    features: v?.features ?? [],
+
     // misc
     make: v?.make ?? '',
     purchaseDate: v?.purchaseDate ?? '',
@@ -99,6 +107,8 @@ router.get('/search', async (req, res) => {
       carName,
       color,
       fuelType,
+      city,
+      location,
       ownerName,
       ownerPhone,
       status,
@@ -120,6 +130,8 @@ router.get('/search', async (req, res) => {
         { category: searchRegex },
         { model: searchRegex },
         { carName: searchRegex },
+        { city: searchRegex },
+        { location: searchRegex },
         { ownerName: searchRegex },
         { ownerPhone: searchRegex },
         { assignedDriver: searchRegex }
@@ -134,6 +146,8 @@ router.get('/search', async (req, res) => {
     if (carName) filter.carName = new RegExp(carName, 'i');
     if (color) filter.color = new RegExp(color, 'i');
     if (fuelType) filter.fuelType = new RegExp(fuelType, 'i');
+    if (city) filter.city = new RegExp(city, 'i');
+    if (location) filter.location = new RegExp(location, 'i');
     if (ownerName) filter.ownerName = new RegExp(ownerName, 'i');
     if (ownerPhone) filter.ownerPhone = new RegExp(ownerPhone, 'i');
     if (status) filter.status = status;
@@ -178,8 +192,17 @@ router.get('/', async (req, res) => {
     const sortBy = req.query.sortBy || 'vehicleId';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
 
-    const total = await Vehicle.countDocuments();
-    const list = await Vehicle.find()
+    // Build filter from query params
+    const filter = {};
+    if (req.query.city) filter.city = new RegExp(req.query.city, 'i');
+    if (req.query.status) filter.status = req.query.status;
+    if (req.query.brand) filter.brand = new RegExp(req.query.brand, 'i');
+    if (req.query.category) filter.category = new RegExp(req.query.category, 'i');
+    if (req.query.fuelType) filter.fuelType = new RegExp(req.query.fuelType, 'i');
+    if (req.query.kycStatus) filter.kycStatus = req.query.kycStatus;
+
+    const total = await Vehicle.countDocuments(filter);
+    const list = await Vehicle.find(filter)
       .populate('investorId', 'investorName phone email')
       .sort({ [sortBy]: sortOrder })
       .skip(skip)

@@ -74,18 +74,25 @@ router.get('/', async (req, res) => {
     const sortBy = req.query.sortBy || 'createdAt';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
 
-    // Only fetch drivers added manually by admin (not self-registered)
-    const filter = { isManualEntry: true };
+    // Fetch from DriverSignup (where users register through website)
+    const filter = {};
     
-    const total = await Driver.countDocuments(filter);
-    const list = await Driver.find(filter)
+    const total = await DriverSignup.countDocuments(filter);
+    const list = await DriverSignup.find(filter)
       .sort({ [sortBy]: sortOrder })
       .skip(skip)
       .limit(limit)
       .lean();
     
+    // Map DriverSignup to match expected Driver format
+    const mappedList = list.map(driver => ({
+      ...driver,
+      id: driver._id,
+      joinDate: driver.signupDate || driver.createdAt
+    }));
+    
     res.json({
-      data: list,
+      data: mappedList,
       pagination: {
         total,
         page,
@@ -135,10 +142,34 @@ router.get('/signup/credentials', async (req, res) => {
 });
 
 router.get('/:id', async (req, res) => {
-  const id = Number(req.params.id);
-  const item = await Driver.findOne({ id }).lean();
-  if (!item) return res.status(404).json({ message: 'Driver not found' });
-  res.json(item);
+  try {
+    // Try to find by MongoDB _id first (for DriverSignup entries)
+    let item = await DriverSignup.findById(req.params.id).lean();
+    
+    // If not found, try numeric id in Driver collection
+    if (!item) {
+      const numericId = Number(req.params.id);
+      if (!isNaN(numericId)) {
+        item = await Driver.findOne({ id: numericId }).lean();
+      }
+    }
+    
+    if (!item) {
+      return res.status(404).json({ message: 'Driver not found' });
+    }
+    
+    // Map to expected format
+    const mappedItem = {
+      ...item,
+      id: item._id || item.id,
+      joinDate: item.signupDate || item.joinDate || item.createdAt
+    };
+    
+    res.json(mappedItem);
+  } catch (error) {
+    console.error('Error fetching driver:', error);
+    res.status(500).json({ message: 'Failed to fetch driver', error: error.message });
+  }
 });
 
 
@@ -201,7 +232,6 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
-    const id = Number(req.params.id);
     const fields = stripAuthFields(req.body);
 
     // Handle document uploads to Cloudinary
@@ -211,14 +241,13 @@ router.put('/:id', async (req, res) => {
     for (const field of documentFields) {
       if (fields[field] && fields[field].startsWith('data:')) {
         try {
-          const result = await uploadToCloudinary(fields[field], `drivers/${id}/${field}`);
+          const result = await uploadToCloudinary(fields[field], `drivers/${req.params.id}/${field}`);
           uploadedDocs[field] = result.secure_url;
         } catch (uploadErr) {
           console.error(`Failed to upload ${field}:`, uploadErr);
         }
       }
     }
-
 
     // Add emergency contact relation and secondary phone
     const updateData = {
@@ -235,11 +264,24 @@ router.put('/:id', async (req, res) => {
       }
     });
 
-    const updated = await Driver.findOneAndUpdate(
-      { id },
+    // Try to update in DriverSignup first (MongoDB _id)
+    let updated = await DriverSignup.findByIdAndUpdate(
+      req.params.id,
       updateData,
       { new: true }
     ).lean();
+
+    // If not found, try Driver collection with numeric id
+    if (!updated) {
+      const numericId = Number(req.params.id);
+      if (!isNaN(numericId)) {
+        updated = await Driver.findOneAndUpdate(
+          { id: numericId },
+          updateData,
+          { new: true }
+        ).lean();
+      }
+    }
 
     if (!updated) {
       return res.status(404).json({ message: 'Driver not found' });
@@ -253,9 +295,27 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const id = Number(req.params.id);
-  await Driver.deleteOne({ id });
-  res.json({ message: 'Deleted' });
+  try {
+    // Try to delete from DriverSignup first (MongoDB _id)
+    let deleted = await DriverSignup.findByIdAndDelete(req.params.id);
+    
+    // If not found, try Driver collection with numeric id
+    if (!deleted) {
+      const numericId = Number(req.params.id);
+      if (!isNaN(numericId)) {
+        deleted = await Driver.findOneAndDelete({ id: numericId });
+      }
+    }
+    
+    if (!deleted) {
+      return res.status(404).json({ message: 'Driver not found' });
+    }
+    
+    res.json({ message: 'Deleted', driver: deleted });
+  } catch (err) {
+    console.error('Driver delete error:', err);
+    res.status(500).json({ message: 'Failed to delete driver', error: err.message });
+  }
 });
 
 // GET driver earnings summary
