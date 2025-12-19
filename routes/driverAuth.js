@@ -291,4 +291,60 @@ router.put('/complete-registration/:id', async (req, res) => {
 	}
 });
 
+// Get driver registration data by mobile number
+router.get('/registration/by-mobile/:mobile', async (req, res) => {
+	try {
+		const { mobile } = req.params;
+
+		if (!mobile) {
+			return res.status(400).json({ message: 'Mobile number is required.' });
+		}
+
+		// Find driver signup by mobile
+		const driverSignup = await DriverSignup.findOne({ mobile })
+			.select('-password') // Exclude password from response
+			.lean();
+
+		if (!driverSignup) {
+			return res.status(404).json({ message: 'Driver not found with this mobile number.' });
+		}
+
+		return res.json({
+			success: true,
+			driver: driverSignup
+		});
+	} catch (error) {
+		console.error('Get driver registration error:', error);
+		return res.status(500).json({ message: 'Server error fetching driver data.' });
+	}
+});
+
+// Get driver registration data by ID
+router.get('/registration/:id', async (req, res) => {
+	try {
+		const { id } = req.params;
+
+		if (!id) {
+			return res.status(400).json({ message: 'Driver ID is required.' });
+		}
+
+		// Find driver signup by ID
+		const driverSignup = await DriverSignup.findById(id)
+			.select('-password') // Exclude password from response
+			.lean();
+
+		if (!driverSignup) {
+			return res.status(404).json({ message: 'Driver not found.' });
+		}
+
+		return res.json({
+			success: true,
+			driver: driverSignup
+		});
+	} catch (error) {
+		console.error('Get driver registration error:', error);
+		return res.status(500).json({ message: 'Server error fetching driver data.' });
+	}
+});
+
 export default router;
