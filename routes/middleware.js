@@ -17,7 +17,7 @@ export function authenticateToken(req, res, next) {
 
   // Allow a special mock token in development to enable frontend mock auth flows
   if (token === 'mock') {
-    req.user = { id: 'mock', role: 'dev', email: 'mock@udrive.local' };
+    req.user = { id: 'mock', role: 'dev', email: 'mock@24carrental.local' };
     return next();
   }
 

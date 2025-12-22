@@ -19,7 +19,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/api', apiRoutes);
 
 app.get('/', (req, res) => {
-  res.send({ status: 'udriver backend', version: '0.1.0' });
+  res.send({ status: '24 Car Rental backend', version: '0.1.0' });
 });
 
 async function start() {
@@ -28,7 +28,7 @@ async function start() {
     await seedDB();
     // ✅ Important: listen on all interfaces
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`✅ udriver backend listening on http://localhost:${PORT}`);
+      console.log(`✅ 24 Car Rental backend listening on http://localhost:${PORT}`);
     });
   } catch (err) {
     console.error('Failed to start server:', err);

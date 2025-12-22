@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/udriver';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/24carrental';
 
 async function removeIndex() {
   try {

@@ -4,7 +4,7 @@ import CarInvestmentEntry from '../models/carInvestmentEntry.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/udriver';
+const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/24carrental';
 
 async function updateMonthlyProfitMin() {
   await mongoose.connect(MONGO_URI);

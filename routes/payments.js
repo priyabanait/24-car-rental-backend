@@ -76,7 +76,7 @@ router.post('/zwitch/payout', verifyAuth, async (req, res) => {
     }
 
     // Generate unique reference ID
-    const referenceId = `UDRIVER_${Date.now()}_${driverId}`;
+    const referenceId = `24CR_${Date.now()}_${driverId}`;
 
     console.log('Processing ZWITCH payout:', {
       referenceId,
@@ -98,7 +98,7 @@ router.post('/zwitch/payout', verifyAuth, async (req, res) => {
         name: accountHolderName,
         account_number: accountNumber,
         ifsc: ifsc,
-        email: `driver${driverId}@udriver.com`,
+        email: `driver${driverId}@24carrental.com`,
         phone: ''
       },
       mode: 'IMPS'
