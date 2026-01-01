@@ -7,8 +7,23 @@ const router = express.Router();
 router.post('/', async (req, res) => {
   try {
     console.log('Creating car investment entry:', req.body);
+
+    // ✅ FIX: remove empty investorId
+    if (req.body.investorId === '') {
+      delete req.body.investorId;
+    }
+
+    // ✅ Optional safety check
+    if (
+      req.body.investorId &&
+      !mongoose.Types.ObjectId.isValid(req.body.investorId)
+    ) {
+      return res.status(400).json({ error: 'Invalid investorId' });
+    }
+
     const entry = new CarInvestmentEntry(req.body);
     await entry.save();
+
     console.log('Car investment entry created:', entry);
     res.status(201).json(entry);
   } catch (err) {
@@ -62,41 +77,32 @@ router.get('/:id', async (req, res) => {
 // Update car investment entry by ID
 router.put('/:id', async (req, res) => {
   try {
+    // ✅ sanitize empty investorId
+    if (req.body.investorId === '') {
+      delete req.body.investorId;
+    }
+
+    if (
+      req.body.investorId &&
+      !mongoose.Types.ObjectId.isValid(req.body.investorId)
+    ) {
+      return res.status(400).json({ error: 'Invalid investorId' });
+    }
+
     const updated = await CarInvestmentEntry.findByIdAndUpdate(
       req.params.id,
       req.body,
       { new: true, runValidators: true }
     );
-    if (!updated) return res.status(404).json({ error: 'Entry not found' });
 
-    // Update monthlyProfitMin for all related vehicles based on carname
-    try {
-      const Vehicle = (await import('../models/vehicle.js')).default;
-      const vehicles = await Vehicle.find({
-        $or: [
-          { category: new RegExp(`^${updated.carname}$`, 'i') },
-          { carCategory: new RegExp(`^${updated.carname}$`, 'i') }
-        ]
-      });
-      
-      // Update vehicles using updateMany to avoid validation issues
-      if (vehicles.length > 0) {
-        const vehicleIds = vehicles.map(v => v._id);
-        await Vehicle.updateMany(
-          { _id: { $in: vehicleIds } },
-          { $set: { monthlyProfitMin: parseFloat(updated.finalMonthlyPayout || 0) } }
-        );
-      }
-    } catch (vehicleErr) {
-      // Log vehicle update error but don't fail the car investment update
-      console.error('Error updating related vehicles:', vehicleErr);
-    }
+    if (!updated) return res.status(404).json({ error: 'Entry not found' });
 
     res.json(updated);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
+
 
 // Delete car investment entry by ID
 router.delete('/:id', async (req, res) => {

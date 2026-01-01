@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const CarInvestmentEntrySchema = new mongoose.Schema({
   carname: { type: String, required: true },
   carOwnerName: { type: String },
-  investorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Investor' },
+  investorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Investor',required: false},
   investorMobile: { type: String },
   carvalue: { type: Number, required: true },
    MonthlyPayout: { type: Number, required: true },

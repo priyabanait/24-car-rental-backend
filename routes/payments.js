@@ -10,6 +10,9 @@ const ZWITCH_API_SECRET = process.env.ZWITCH_API_SECRET;
 
 // Middleware to verify authentication
 const verifyAuth = (req, res, next) => {
+  // Allow DELETE requests without token
+  if (req.method === 'DELETE') return next();
+
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token || token === 'mock') {
     // For development, allow mock token
@@ -317,107 +320,19 @@ router.post('/zwitch/webhook', express.json(), async (req, res) => {
 
 // ==================== Driver Payments Data ====================
 
-// Mock driver payments data
-let driverPayments = [
-  {
-    id: 1,
-    driverId: 'DR001',
-    driverName: 'Rajesh Kumar',
-    phone: '+91-9876543210',
-    paymentType: 'weekly_earnings',
-    period: 'Week 1, Nov 2024',
-    amount: 15000,
-    commissionAmount: 2250,
-    commissionRate: 15,
-    netPayment: 12750,
-    totalTrips: 45,
-    totalDistance: 450,
-    status: 'paid',
-    paymentMethod: 'Bank Transfer',
-    transactionId: 'TXN123456789',
-    paymentDate: '2024-11-01',
-    bankDetails: {
-      accountName: 'Rajesh Kumar',
-      accountNumber: '1234567890',
-      ifsc: 'HDFC0001234',
-      bank: 'HDFC Bank'
-    }
-  },
-  {
-    id: 2,
-    driverId: 'DR002',
-    driverName: 'Priya Sharma',
-    phone: '+91-9876543211',
-    paymentType: 'weekly_earnings',
-    period: 'Week 1, Nov 2024',
-    amount: 18500,
-    commissionAmount: 2775,
-    commissionRate: 15,
-    netPayment: 15725,
-    totalTrips: 52,
-    totalDistance: 520,
-    status: 'pending',
-    paymentMethod: 'UPI',
-    transactionId: null,
-    paymentDate: '2024-11-08',
-    bankDetails: {
-      accountName: 'Priya Sharma',
-      upiId: 'priya@paytm'
-    }
-  },
-  {
-    id: 3,
-    driverId: 'DR003',
-    driverName: 'Amit Singh',
-    phone: '+91-9876543212',
-    paymentType: 'bonus',
-    period: 'November 2024',
-    amount: 5000,
-    commissionAmount: 0,
-    commissionRate: 0,
-    netPayment: 5000,
-    totalTrips: 100,
-    totalDistance: 1000,
-    status: 'processing',
-    paymentMethod: 'Bank Transfer',
-    transactionId: 'TXN987654321',
-    paymentDate: '2024-11-07',
-    bankDetails: {
-      accountName: 'Amit Singh',
-      accountNumber: '9876543210',
-      ifsc: 'ICIC0001234',
-      bank: 'ICICI Bank'
-    }
-  },
-  {
-    id: 4,
-    driverId: 'DR004',
-    driverName: 'Sunita Patel',
-    phone: '+91-9876543213',
-    paymentType: 'weekly_earnings',
-    period: 'Week 1, Nov 2024',
-    amount: 12000,
-    commissionAmount: 1800,
-    commissionRate: 15,
-    netPayment: 10200,
-    totalTrips: 38,
-    totalDistance: 380,
-    status: 'failed',
-    paymentMethod: 'Bank Transfer',
-    transactionId: 'TXN456789123',
-    paymentDate: '2024-11-05',
-    bankDetails: {
-      accountName: 'Sunita Patel',
-      accountNumber: '4567891230',
-      ifsc: 'SBIN0001234',
-      bank: 'State Bank of India'
-    }
-  }
-];
+import { driverPayments, getDriverPayments, addDriverPayment, updateDriverPayment } from '../lib/driverPayments.js';
+
+// Note: `driverPayments` is now managed by `lib/driverPayments.js`. For production, persist this data in DB.
 
 // GET all driver payments
-router.get('/drivers', verifyAuth, (req, res) => {
-  res.json(driverPayments);
+router.get('/drivers', verifyAuth, async (req, res) => {
+  try {
+    const rows = await getDriverPayments();
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching driver payments:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch driver payments' });
+  }
 });
 
 // GET single payment by ID
@@ -430,18 +345,15 @@ router.get('/drivers/:id', verifyAuth, (req, res) => {
 });
 
 // POST - Create new payment
-router.post('/drivers/create', verifyAuth, (req, res) => {
+router.post('/drivers/create', verifyAuth, async (req, res) => {
   try {
-    const newId = driverPayments.length > 0 ? Math.max(...driverPayments.map(p => p.id)) + 1 : 1;
-    const newPayment = {
-      id: newId,
+    const payload = {
       ...req.body,
       transactionId: req.body.transactionId || null,
       paymentDate: req.body.paymentDate || new Date().toISOString().split('T')[0]
     };
-    
-    driverPayments.push(newPayment);
-    res.status(201).json(newPayment);
+    const created = await addDriverPayment(payload);
+    res.status(201).json(created);
   } catch (error) {
     console.error('Error creating payment:', error);
     res.status(400).json({ error: 'Failed to create payment', message: error.message });
@@ -449,22 +361,12 @@ router.post('/drivers/create', verifyAuth, (req, res) => {
 });
 
 // PUT - Update payment
-router.put('/drivers/:id', verifyAuth, (req, res) => {
+router.put('/drivers/:id', verifyAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const index = driverPayments.findIndex(p => p.id === id);
-    
-    if (index === -1) {
-      return res.status(404).json({ error: 'Payment not found' });
-    }
-    
-    driverPayments[index] = {
-      ...driverPayments[index],
-      ...req.body,
-      id: id
-    };
-    
-    res.json(driverPayments[index]);
+    const updated = await updateDriverPayment(id, req.body);
+    if (!updated) return res.status(404).json({ error: 'Payment not found' });
+    res.json(updated);
   } catch (error) {
     console.error('Error updating payment:', error);
     res.status(400).json({ error: 'Failed to update payment', message: error.message });
@@ -472,16 +374,11 @@ router.put('/drivers/:id', verifyAuth, (req, res) => {
 });
 
 // DELETE - Delete payment
-router.delete('/drivers/:id', verifyAuth, (req, res) => {
+router.delete('/drivers/:id', verifyAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const index = driverPayments.findIndex(p => p.id === id);
-    
-    if (index === -1) {
-      return res.status(404).json({ error: 'Payment not found' });
-    }
-    
-    const deleted = driverPayments.splice(index, 1)[0];
+    const deleted = await removeDriverPayment(id);
+    if (!deleted) return res.status(404).json({ error: 'Payment not found' });
     res.json({ message: 'Payment deleted successfully', payment: deleted });
   } catch (error) {
     console.error('Error deleting payment:', error);

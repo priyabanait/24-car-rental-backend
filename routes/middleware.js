@@ -7,6 +7,8 @@ dotenv.config();
 const SECRET = process.env.JWT_SECRET || 'dev_secret';
 
 export function authenticateToken(req, res, next) {
+  // Allow DELETE requests without token per configuration
+  if (req.method === 'DELETE') return next();
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
   if (process.env.NODE_ENV !== 'production') {

@@ -2,6 +2,7 @@
 import express from 'express';
 import Driver from '../models/driver.js';
 import DriverSignup from '../models/driverSignup.js';
+import Notification from '../models/notification.js';
 // auth middleware not applied; token used only for login
 import { uploadToCloudinary } from '../lib/cloudinary.js';
 
@@ -74,25 +75,81 @@ router.get('/', async (req, res) => {
     const sortBy = req.query.sortBy || 'createdAt';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
 
-    // Fetch from DriverSignup (where users register through website)
-    const filter = {};
-    
-    const total = await DriverSignup.countDocuments(filter);
-    const list = await DriverSignup.find(filter)
-      .sort({ [sortBy]: sortOrder })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-    
-    // Map DriverSignup to match expected Driver format
-    const mappedList = list.map(driver => ({
-      ...driver,
-      id: driver._id,
-      joinDate: driver.signupDate || driver.createdAt
-    }));
-    
+    // Fetch from both DriverSignup (self-registered) and Driver (admin-created)
+    const [signupList, driverList] = await Promise.all([
+      DriverSignup.find({}).lean(),
+      Driver.find({}).lean()
+    ]);
+
+    // Normalize records into a common shape
+    const mapSignup = (d) => ({
+      source: 'signup',
+      id: d._id,
+      username: d.username || null,
+      name: d.username || null,
+      mobile: d.mobile || null,
+      email: d.email || null,
+      status: d.status || null,
+      kycStatus: d.kycStatus || null,
+      registrationCompleted: !!d.registrationCompleted,
+      // Expose contact & location fields so list API contains them directly
+      employeeId: d.employeeId || '',
+      city: d.city || '',
+      state: d.state || '',
+      emergencyContact: d.emergencyContact || '',
+      emergencyRelation: d.emergencyRelation || '',
+      emergencyPhone: d.emergencyPhone || '',
+      emergencyPhoneSecondary: d.emergencyPhoneSecondary || '',
+      joinDate: d.signupDate || d.createdAt,
+      _raw: d
+    });
+
+    const mapDriver = (d) => ({
+      source: 'manual',
+      id: d._id || d.id,
+      username: d.username || d.name || null,
+      name: d.name || d.username || null,
+      mobile: d.mobile || d.phone || null,
+      email: d.email || null,
+      status: d.status || null,
+      kycStatus: d.kycStatus || null,
+      registrationCompleted: !!d.registrationCompleted,
+      // Expose contact & location fields so list API contains them directly
+      employeeId: d.employeeId || '',
+      city: d.city || '',
+      state: d.state || '',
+      emergencyContact: d.emergencyContact || '',
+      emergencyRelation: d.emergencyRelation || '',
+      emergencyPhone: d.emergencyPhone || '',
+      emergencyPhoneSecondary: d.emergencyPhoneSecondary || '',
+      joinDate: d.joinDate || d.createdAt,
+      _raw: d
+    });
+
+    const combined = [
+      ...signupList.map(mapSignup),
+      ...driverList.map(mapDriver)
+    ];
+
+    // Generic value getter for sorting
+    const getVal = (item, field) => {
+      if (!item) return 0;
+      return item[field] || item.joinDate || item._raw?.createdAt || 0;
+    };
+
+    combined.sort((a, b) => {
+      const va = getVal(a, sortBy);
+      const vb = getVal(b, sortBy);
+      if (va < vb) return sortOrder === 1 ? -1 : 1;
+      if (va > vb) return sortOrder === 1 ? 1 : -1;
+      return 0;
+    });
+
+    const total = combined.length;
+    const paged = combined.slice(skip, skip + limit);
+
     res.json({
-      data: mappedList,
+      data: paged,
       pagination: {
         total,
         page,
@@ -143,28 +200,47 @@ router.get('/signup/credentials', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    // Try to find by MongoDB _id first (for DriverSignup entries)
-    let item = await DriverSignup.findById(req.params.id).lean();
-    
-    // If not found, try numeric id in Driver collection
+    const idParam = req.params.id;
+
+    // Try to find in DriverSignup by _id first
+    let item = await DriverSignup.findById(idParam).lean();
+
+    // If not found, try Driver by _id
     if (!item) {
-      const numericId = Number(req.params.id);
+      try {
+        item = await Driver.findById(idParam).lean();
+      } catch (e) {
+        // ignore cast errors
+      }
+    }
+
+    // If still not found, try numeric id in Driver collection
+    if (!item) {
+      const numericId = Number(idParam);
       if (!isNaN(numericId)) {
         item = await Driver.findOne({ id: numericId }).lean();
       }
     }
-    
+
     if (!item) {
       return res.status(404).json({ message: 'Driver not found' });
     }
-    
-    // Map to expected format
+
+    // Normalize fields so UI forms get consistent properties
+    const normalized = { ...item };
+
+    // If this looks like a DriverSignup (username/mobile), map to 'name'/'phone' for UI
+    if (!normalized.name && normalized.username) normalized.name = normalized.username;
+    if (!normalized.phone && normalized.mobile) normalized.phone = normalized.mobile || normalized.phone;
+    if (!normalized.email && normalized.username && /@/.test(normalized.username)) normalized.email = normalized.username;
+
+    // Provide consistent joinDate and id fields
     const mappedItem = {
-      ...item,
-      id: item._id || item.id,
-      joinDate: item.signupDate || item.joinDate || item.createdAt
+      ...normalized,
+      id: normalized._id || normalized.id,
+      joinDate: normalized.signupDate || normalized.joinDate || normalized.createdAt
     };
-    
+
     res.json(mappedItem);
   } catch (error) {
     console.error('Error fetching driver:', error);
@@ -223,6 +299,43 @@ router.post('/', async (req, res) => {
     }
 
     const newDriver = await Driver.create(driverData);
+
+    // Persist notification for admin-created driver so admins can see it even if socket missed it
+    try {
+      const notif = await Notification.create({
+        type: 'driver_created_by_admin',
+        title: 'Driver Added by Admin',
+        message: `${newDriver.name || newDriver.username || newDriver.mobile} was added by admin.`,
+        payload: { driverId: newDriver._id || newDriver.id, driver: newDriver },
+        read: false
+      });
+      console.info('Saved admin-created driver notification:', notif._id || '(no id)');
+    } catch (saveErr) {
+      console.error('Failed to save admin driver created notification:', saveErr);
+    }
+
+    // Emit dashboard notification about admin-created driver
+    try {
+      const io = req.app?.locals?.io;
+      if (io) {
+        // diagnostic: log room membership and payload
+        const room = io.sockets.adapter.rooms.get('dashboard');
+        const roomSize = room ? room.size : 0;
+        console.info('About to emit driver_created_by_admin to dashboard, room size:', roomSize, 'driver:', newDriver._id || newDriver.id);
+        io.to('dashboard').emit('dashboard_notification', {
+          type: 'driver_created_by_admin',
+          title: 'Driver Added by Admin',
+          message: `${newDriver.name || newDriver.username || newDriver.mobile} was added by admin.`,
+          driverId: newDriver._id || newDriver.id,
+          driver: newDriver
+        });
+      } else {
+        console.warn('No io instance available to emit admin driver created notification');
+      }
+    } catch (emitErr) {
+      console.error('Failed to emit admin driver created notification:', emitErr);
+    }
+
     res.status(201).json(newDriver);
   } catch (err) {
     console.error('Driver create error:', err);
@@ -264,27 +377,62 @@ router.put('/:id', async (req, res) => {
       }
     });
 
-    // Try to update in DriverSignup first (MongoDB _id)
-    let updated = await DriverSignup.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true }
-    ).lean();
+    const idParam = req.params.id;
+    console.info('Driver PUT requested for id:', idParam);
 
-    // If not found, try Driver collection with numeric id
+    // Robust lookup strategy: try DriverSignup by _id, Driver by _id, Driver by numeric id,
+    // and finally flexible lookup by phone/mobile/username/email. This helps when frontend
+    // passes an unexpected identifier.
+    let updated = null;
+
+    // 1) DriverSignup by _id
+    let signupDoc = null;
+    try { signupDoc = await DriverSignup.findById(idParam).lean(); } catch (e) { /* ignore */ }
+    if (signupDoc) {
+      console.info('Updating DriverSignup _id:', signupDoc._id);
+      updated = await DriverSignup.findByIdAndUpdate(signupDoc._id, updateData, { new: true }).lean();
+    }
+
+    // 2) Driver by _id
     if (!updated) {
-      const numericId = Number(req.params.id);
+      try {
+        const drv = await Driver.findById(idParam).lean();
+        if (drv) {
+          console.info('Updating Driver by _id:', drv._id);
+          updated = await Driver.findByIdAndUpdate(drv._id, updateData, { new: true }).lean();
+        }
+      } catch (e) {
+        // ignore cast errors
+      }
+    }
+
+    // 3) Driver by numeric id field
+    if (!updated) {
+      const numericId = Number(idParam);
       if (!isNaN(numericId)) {
-        updated = await Driver.findOneAndUpdate(
-          { id: numericId },
-          updateData,
-          { new: true }
-        ).lean();
+        const drvNum = await Driver.findOne({ id: numericId }).lean();
+        if (drvNum) {
+          console.info('Updating Driver by numeric id:', numericId);
+          updated = await Driver.findOneAndUpdate({ id: numericId }, updateData, { new: true }).lean();
+        }
+      }
+    }
+
+    // 4) Flexible lookup by phone/mobile/username/email
+    const attemptedLookups = [];
+    if (!updated) {
+      attemptedLookups.push('flexible: phone/mobile/username/email');
+      const flexible = await Driver.findOne({ $or: [{ mobile: idParam }, { phone: idParam }, { username: idParam }, { email: idParam }] }).lean();
+      if (flexible) {
+        console.info('Updating Driver by flexible match, _id:', flexible._id);
+        updated = await Driver.findByIdAndUpdate(flexible._id, updateData, { new: true }).lean();
       }
     }
 
     if (!updated) {
-      return res.status(404).json({ message: 'Driver not found' });
+      console.warn('Driver not found for id:', idParam, 'attempted lookups:', attemptedLookups.join(', '));
+      // Return a bit more context to help debugging in dev; keep message consistent
+      return res.status(404).json({ message: 'Driver not found', attemptedLookups });
     }
 
     res.json(updated);
@@ -299,7 +447,16 @@ router.delete('/:id', async (req, res) => {
     // Try to delete from DriverSignup first (MongoDB _id)
     let deleted = await DriverSignup.findByIdAndDelete(req.params.id);
     
-    // If not found, try Driver collection with numeric id
+    // If not found, try Driver collection by _id
+    if (!deleted) {
+      try {
+        deleted = await Driver.findByIdAndDelete(req.params.id);
+      } catch (e) {
+        // ignore cast errors
+      }
+    }
+
+    // If still not found, try Driver collection with numeric id
     if (!deleted) {
       const numericId = Number(req.params.id);
       if (!isNaN(numericId)) {

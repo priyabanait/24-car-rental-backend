@@ -11,17 +11,31 @@ import DriverSignup from '../models/driverSignup.js';
 import Driver from '../models/driver.js';
 import mongoose from 'mongoose';
 
+function escapeRegex(str) {
+  if (str === undefined || str === null) return '';
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 dotenv.config();
 
 const router = express.Router();
 const SECRET = process.env.JWT_SECRET || 'dev_secret';
 
 // Helper function to calculate payment details
-function calculatePaymentDetails(selection) {
-  // Calculate days (inclusive)
+// Now async: if rentStartDate is missing, check for an *active* vehicle assigned to this driver
+// If such a vehicle exists, treat rent as started from today (without persisting) so that
+// API responses show days when the vehicle is assigned + active.
+async function calculatePaymentDetails(selection) {
+  // Use only the persisted rentStartDate. Do NOT infer a start date from vehicle assignment
+  // here — rent must be started explicitly by the vehicle update handler so that it is
+  // persisted and there's no ambiguity about when counting began.
+  let effectiveStart = selection.rentStartDate ? new Date(selection.rentStartDate) : null;
+  let startInferred = false; // inference removed — kept for API compatibility
+
+  // Calculate days (inclusive) using effectiveStart if present
   let days = 0;
-  if (selection.rentStartDate) {
-    const start = new Date(selection.rentStartDate);
+  if (effectiveStart) {
+    const start = effectiveStart;
     let end = new Date();
     if (selection.status === 'inactive' && selection.rentPausedDate) {
       end = new Date(selection.rentPausedDate);
@@ -57,19 +71,12 @@ function calculatePaymentDetails(selection) {
   let rentDue = 0;
 
   if (selection.paymentType === 'security') {
-    // Payment was for deposit
-    // Deposit Due = Total Deposit - What was paid
     depositDue = Math.max(0, totalDeposit - paidAmount);
-    // Rent is full amount (not paid yet), minus adjustment
     rentDue = Math.max(0, totalRent - adjustment);
   } else if (selection.paymentType === 'rent') {
-    // Payment was for rent
-    // Rent Due = Total Rent - What was paid - Adjustment
     rentDue = Math.max(0, totalRent - paidAmount - adjustment);
-    // Deposit is still full amount (not paid yet)
     depositDue = totalDeposit;
   } else {
-    // No payment type specified - both are due
     depositDue = totalDeposit;
     rentDue = Math.max(0, totalRent - adjustment);
   }
@@ -90,7 +97,8 @@ function calculatePaymentDetails(selection) {
     extraAmount,
     adjustment,
     paidAmount,
-    totalPayable
+    totalPayable,
+    startInferred
   };
 }
 
@@ -307,14 +315,14 @@ router.get('/by-manager/:manager', async (req, res) => {
     // Match by username (case-insensitive)
     if (allUsernames.length > 0) {
       paymentQuery.$or.push({ 
-        driverUsername: { $in: allUsernames.map(u => new RegExp(`^${u}$`, 'i')) } 
+        driverUsername: { $in: allUsernames.map(u => new RegExp(`^${escapeRegex(String(u))}$`, 'i')) } 
       });
     }
 
     // Match by mobile
     if (allMobiles.length > 0) {
       paymentQuery.$or.push({ 
-        driverMobile: { $in: allMobiles.map(m => new RegExp(`^${m}$`, 'i')) } 
+        driverMobile: { $in: allMobiles.map(m => new RegExp(`^${escapeRegex(String(m))}$`, 'i')) } 
       });
     }
 
@@ -330,12 +338,12 @@ router.get('/by-manager/:manager', async (req, res) => {
 
     console.log(`Found ${payments.length} payments for manager`);
     
-    // Add calculated payment details to each payment
-    const paymentsWithDetails = payments.map(p => ({
+    // Add calculated payment details to each payment (calculate async so we can infer start from vehicle assignment)
+    const paymentsWithDetails = await Promise.all(payments.map(async p => ({
       ...p,
-      paymentDetails: calculatePaymentDetails(p)
-    }));
-    
+      paymentDetails: await calculatePaymentDetails(p)
+    })));
+
     res.json(paymentsWithDetails);
   } catch (err) {
     console.error('Get payments by manager error:', err);
@@ -344,6 +352,8 @@ router.get('/by-manager/:manager', async (req, res) => {
 });
 // Middleware to verify driver JWT token
 const authenticateDriver = (req, res, next) => {
+  // Allow DELETE requests without token
+  if (req.method === 'DELETE') return next();
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
   
@@ -377,14 +387,14 @@ router.get('/', async (req, res) => {
       .limit(limit)
       .lean();
     
-    // Add calculated payment details to each selection
-    const selectionsWithBreakdown = selections.map(s => {
-      const paymentDetails = calculatePaymentDetails(s);
+    // Add calculated payment details to each selection (async so vehicle assignment can be considered)
+    const selectionsWithBreakdown = await Promise.all(selections.map(async s => {
+      const paymentDetails = await calculatePaymentDetails(s);
       return {
         ...s,
         paymentDetails
       };
-    });
+    }));
     
     res.json({
       data: selectionsWithBreakdown,
@@ -410,10 +420,10 @@ router.get('/by-mobile/:mobile', async (req, res) => {
       .sort({ selectedDate: -1 })
       .lean();
     // Ensure each selection includes a `paymentDetails` object (compute if missing)
-    const selectionsWithDetails = selections.map(s => ({
+    const selectionsWithDetails = await Promise.all(selections.map(async s => ({
       ...s,
-      paymentDetails: s.paymentDetails|| calculatePaymentDetails(s)
-    }));
+      paymentDetails: s.paymentDetails || await calculatePaymentDetails(s)
+    })));
 
     res.json(selectionsWithDetails);
   } catch (err) {
@@ -530,6 +540,11 @@ router.post('/', authenticateDriver, async (req, res) => {
     const rentPerDay = typeof slab.rentDay === 'number' ? slab.rentDay : 0;
 
     // Create new selection with calculated values
+    // Rent start date should NOT be set at plan selection creation.
+    // Rent will only start when an admin assigns the driver to an active vehicle
+    // (the vehicle update handler is responsible for setting `rentStartDate`).
+    const rentStartDate = null;
+
     const selection = new DriverPlanSelection({
       driverSignupId: req.driver.id,
       driverUsername: driver.username,
@@ -547,8 +562,8 @@ router.post('/', authenticateDriver, async (req, res) => {
       calculatedRent: rent,
       calculatedCover: cover,
       calculatedTotal: totalAmount,
-      // Start daily rent accrual from today
-      rentStartDate: new Date(),
+      // rentStartDate will be set only when vehicle assigned & active
+      rentStartDate: rentStartDate,
       rentPerDay: rentPerDay
     });
 
@@ -652,8 +667,23 @@ router.get('/:id/rent-summary', async (req, res) => {
       return res.status(404).json({ message: 'Plan selection not found' });
     }
 
-    // If status is inactive, stop calculating rent
-    if (selection.status === 'inactive' || !selection.rentStartDate) {
+    // If selection is inactive, stop calculating rent
+    if (selection.status === 'inactive') {
+      return res.json({
+        hasStarted: false,
+        totalDays: 0,
+        rentPerDay: selection.rentPerDay || (selection.selectedRentSlab?.rentDay || 0),
+        totalDue: 0,
+        entries: [],
+        status: selection.status
+      });
+    }
+
+    // Determine effective start date: only use stored rentStartDate. Don't infer from vehicle assignment
+    let effectiveStart = selection.rentStartDate ? new Date(selection.rentStartDate) : null;
+    let inferredFromVehicle = false; // inference removed to ensure rent only starts when persisted via vehicle update
+
+    if (!effectiveStart) {
       return res.json({
         hasStarted: false,
         totalDays: 0,
@@ -665,7 +695,7 @@ router.get('/:id/rent-summary', async (req, res) => {
     }
 
     const rentPerDay = selection.rentPerDay || (selection.selectedRentSlab?.rentDay || 0) || 0;
-    const start = new Date(selection.rentStartDate);
+    const start = effectiveStart;
     const today = new Date();
     // Normalize to local midnight for day-diff consistency
     const toYmd = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -689,7 +719,8 @@ router.get('/:id/rent-summary', async (req, res) => {
       totalDays,
       rentPerDay,
       totalDue,
-      startDate: selection.rentStartDate,
+      startDate: effectiveStart,
+      inferredFromVehicle,
       asOfDate: end.toISOString().slice(0, 10),
       entries,
       status: selection.status

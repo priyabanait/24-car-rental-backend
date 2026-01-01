@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import Driver from '../models/driver.js';
 import DriverSignup from '../models/driverSignup.js';
+import Notification from '../models/notification.js';
 
 dotenv.config();
 
@@ -38,6 +39,41 @@ router.post('/signup', async (req, res) => {
 			kycStatus: 'pending'
 		});
 		await driverSignup.save();
+
+		// Persist notification to DB so admin can see it later even if socket missed it
+		try {
+			const notif = await Notification.create({
+				type: 'new_driver',
+				title: 'New Driver Signup',
+				message: `${driverSignup.username || driverSignup.mobile} signed up.`,
+				payload: { driverId: driverSignup._id, driver: driverSignup },
+				read: false
+			});
+			console.info('Saved new driver notification:', notif._id || '(no id)');
+		} catch (saveErr) {
+			console.error('Failed to save new driver notification:', saveErr);
+		} 
+
+		// Emit dashboard notification for new signup
+		try {
+			const io = req.app?.locals?.io;
+			if (io) {
+                const room = io.sockets.adapter.rooms.get('dashboard');
+                const roomSize = room ? room.size : 0;
+                console.info('About to emit new_driver to dashboard, room size:', roomSize, 'signup id:', driverSignup._id);
+                io.to('dashboard').emit('dashboard_notification', {
+                    type: 'new_driver',
+                    title: 'New Driver Signup',
+                    message: `${driverSignup.username || driverSignup.mobile} signed up.`,
+                    driverId: driverSignup._id,
+                    driver: driverSignup
+                });
+            } else {
+                console.warn('No io instance available to emit new driver signup notification');
+            }
+        } catch (emitErr) {
+            console.error('Failed to emit new driver signup notification:', emitErr);
+        }
 
 		// Generate JWT token
 		const token = jwt.sign(
@@ -141,6 +177,40 @@ router.post('/signup-otp', async (req, res) => {
 			kycStatus: 'pending'
 		});
 		await driverSignup.save();
+
+		// Persist notification for new OTP signup
+		try {
+			await Notification.create({
+				type: 'new_driver',
+				title: 'New Driver Signup',
+				message: `${driverSignup.username || driverSignup.mobile} signed up (OTP).`,
+				payload: { driverId: driverSignup._id, driver: driverSignup },
+				read: false
+			});
+		} catch (saveErr) {
+			console.error('Failed to save new driver (OTP) notification:', saveErr);
+		}
+
+		// Emit dashboard notification for new OTP signup
+		try {
+			const io = req.app?.locals?.io;
+			if (io) {
+                const room = io.sockets.adapter.rooms.get('dashboard');
+                const roomSize = room ? room.size : 0;
+                console.info('About to emit new_driver (OTP) to dashboard, room size:', roomSize, 'signup id:', driverSignup._id);
+                io.to('dashboard').emit('dashboard_notification', {
+                    type: 'new_driver',
+                    title: 'New Driver Signup',
+                    message: `${driverSignup.username || driverSignup.mobile} signed up (OTP).`,
+                    driverId: driverSignup._id,
+                    driver: driverSignup
+                });
+            } else {
+                console.warn('No io instance available to emit new driver OTP signup notification');
+            }
+        } catch (emitErr) {
+            console.error('Failed to emit new driver OTP signup notification:', emitErr);
+        }
 
 		// Generate JWT token
 		const token = jwt.sign(
@@ -275,6 +345,36 @@ router.put('/complete-registration/:id', async (req, res) => {
 		driverSignup.kycStatus = 'pending';
 
 		await driverSignup.save();
+
+		// Persist registration completed notification
+		try {
+			const notif = await Notification.create({
+				type: 'driver_registration_completed',
+				title: 'Driver Registration Completed',
+				message: `${driverSignup.username || driverSignup.mobile} completed registration.`,
+				payload: { driverId: driverSignup._id, driver: driverSignup },
+				read: false
+			});
+			console.info('Saved registration completed notification:', notif._id || '(no id)');
+		} catch (saveErr) {
+			console.error('Failed to save registration completed notification:', saveErr);
+		} 
+
+		// Emit dashboard notification for completed registration
+		try {
+			const io = req.app?.locals?.io;
+			if (io) {
+				io.to('dashboard').emit('dashboard_notification', {
+					type: 'driver_registration_completed',
+					title: 'Driver Registration Completed',
+					message: `${driverSignup.username || driverSignup.mobile} completed registration.`,
+					driverId: driverSignup._id,
+					driver: driverSignup
+				});
+			}
+		} catch (emitErr) {
+			console.error('Failed to emit registration completed notification:', emitErr);
+		}
 
 		return res.json({ 
 			message: 'Registration completed successfully. Your profile is under review.',

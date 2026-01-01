@@ -1,6 +1,10 @@
 import express from 'express';
 import Vehicle from '../models/vehicle.js';
 import Booking from '../models/booking.js';
+import Driver from '../models/driver.js';
+import DriverSignup from '../models/driverSignup.js';
+import DriverPlanSelection from '../models/driverPlanSelection.js';
+import mongoose from 'mongoose';
 // auth middleware not applied; token used only for login
 import { uploadToCloudinary } from '../lib/cloudinary.js';
 
@@ -15,6 +19,11 @@ function stripAuthFields(source) {
     if (!disallowed.has(k)) cleaned[k] = v;
   }
   return cleaned;
+}
+
+function escapeRegex(str) {
+  if (str === undefined || str === null) return '';
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // Normalize vehicle object to always include expected keys so clients "see all data"
@@ -757,6 +766,225 @@ router.put('/:id', async (req, res) => {
       { ...updates, ...uploadedDocs },
       { new: true }
     ).lean();
+
+    // If the vehicle is active and has an assigned driver, ensure any matching
+    // driver plan selections that have not yet started rent (rentStartDate === null)
+    // are updated to start now. This ensures rent counting starts only after
+    // driver assignment + vehicle active state.
+    try {
+      const assigned = vehicle?.assignedDriver;
+      const becameActive = vehicle && vehicle.status === 'active';
+      const becameInactive = vehicle && (vehicle.status === 'inactive' || vehicle.status === 'suspended');
+
+      if (assigned && (becameActive || becameInactive)) {
+        const orClauses = [];
+
+        // If assigned looks like an ObjectId, try DriverSignup (preferred) then Driver
+        if (mongoose.Types.ObjectId.isValid(assigned)) {
+          try {
+            const signup = await DriverSignup.findById(assigned).lean();
+            if (signup) {
+              // Match by signup id, mobile, username and name (escape values for safe regex)
+              orClauses.push({ driverSignupId: signup._id });
+              const _sMobile = signup.mobile ? escapeRegex(String(signup.mobile)) : null;
+              const _sUsername = signup.username ? escapeRegex(String(signup.username)) : null;
+              const _sName = signup.name ? escapeRegex(String(signup.name)) : null;
+              if (_sMobile) orClauses.push({ driverMobile: new RegExp(`^${_sMobile}$`, 'i') });
+              if (_sUsername) orClauses.push({ driverUsername: new RegExp(`^${_sUsername}$`, 'i') });
+              if (_sName) orClauses.push({ driverName: new RegExp(`^${_sName}$`, 'i') });
+            } else {
+              // Fallback to Driver collection
+              try {
+                const drv = await Driver.findById(assigned).lean();
+                if (drv) {
+                  const _dMobile = drv.mobile ? escapeRegex(String(drv.mobile)) : null;
+                  const _dUsername = drv.username ? escapeRegex(String(drv.username)) : null;
+                  const _dName = drv.name ? escapeRegex(String(drv.name)) : null;
+                  if (_dMobile) orClauses.push({ driverMobile: new RegExp(`^${_dMobile}$`, 'i') });
+                  if (_dUsername) orClauses.push({ driverUsername: new RegExp(`^${_dUsername}$`, 'i') });
+                  if (_dName) orClauses.push({ driverName: new RegExp(`^${_dName}$`, 'i') });
+
+                  // Also try to resolve a corresponding DriverSignup so we can match bookings by driverId
+                  try {
+                    const signupQuery = { $or: [] };
+                    if (drv.mobile) signupQuery.$or.push({ mobile: new RegExp(`^${escapeRegex(String(drv.mobile))}$`, 'i') });
+                    if (drv.username) signupQuery.$or.push({ username: new RegExp(`^${escapeRegex(String(drv.username))}$`, 'i') });
+                    if (drv.name) signupQuery.$or.push({ name: new RegExp(`^${escapeRegex(String(drv.name))}$`, 'i') });
+                    if (signupQuery.$or.length > 0) {
+                      const sMatch = await DriverSignup.findOne(signupQuery).lean();
+                      if (sMatch) {
+                        orClauses.push({ driverSignupId: sMatch._id });
+                        // This will allow booking query translation to include driverId
+                      }
+                    }
+                  } catch (e) {
+                    console.error('Error finding DriverSignup for Driver fallback lookup:', e);
+                  }
+                }
+              } catch (e) {
+                console.error('Driver lookup failed for assignedDriver id (fallback):', e);
+              }
+
+              // Also include raw assigned id as a possible signup/objectId match
+              try {
+                orClauses.push({ driverSignupId: new mongoose.Types.ObjectId(assigned) });
+              } catch (e) {
+                // ignore invalid cast
+              }
+            }
+          } catch (e) {
+            console.error('Error while checking DriverSignup by assigned id:', e);
+          }
+        } else {
+          // assigned is a plain string - decide if it's mobile (numeric) or username
+          if (/^\d+$/.test(String(assigned))) {
+            const _assignEsc = escapeRegex(String(assigned));
+            orClauses.push({ driverMobile: new RegExp(`^${_assignEsc}$`, 'i') });
+          } else {
+            const _assignEsc = escapeRegex(String(assigned));
+            orClauses.push({ driverUsername: new RegExp(`^${_assignEsc}$`, 'i') });
+          }
+
+          // Also try to find corresponding DriverSignup for the string to match driverSignupId
+          try {
+            const signupQuery = { $or: [] };
+            const _assignEsc2 = escapeRegex(String(assigned));
+            signupQuery.$or.push({ mobile: new RegExp(`^${_assignEsc2}$`, 'i') });
+            signupQuery.$or.push({ username: new RegExp(`^${_assignEsc2}$`, 'i') });
+            signupQuery.$or.push({ name: new RegExp(`^${_assignEsc2}$`, 'i') });
+            const signup = await DriverSignup.findOne(signupQuery).lean();
+            if (signup) {
+              orClauses.push({ driverSignupId: signup._id });
+              const _sName3 = signup.name ? escapeRegex(String(signup.name)) : null;
+              if (_sName3) orClauses.push({ driverName: new RegExp(`^${_sName3}$`, 'i') });
+            }
+          } catch (e) {
+            console.error('Error finding DriverSignup for assigned driver string:', e);
+          }
+        }
+
+        if (orClauses.length > 0) {
+          if (becameActive) {
+            // Start rent for matching plan selections that haven't started
+            const query = { rentStartDate: null, status: 'active', $or: orClauses };
+            try {
+              console.log('Attempting to start rent with query:', JSON.stringify(query));
+
+              // Debug: log counts per clause to see why nothing matches
+              for (const clause of orClauses) {
+                try {
+                  const cQuery = { rentStartDate: null, status: 'active', ...clause };
+                  const count = await DriverPlanSelection.countDocuments(cQuery);
+                  console.log('Clause:', JSON.stringify(clause), 'matches:', count);
+                } catch (e) {
+                  console.error('Error counting clause matches:', clause, e);
+                }
+              }
+
+              const totalMatches = await DriverPlanSelection.countDocuments(query);
+              console.log('Total matches for combined query:', totalMatches);
+
+              const result = await DriverPlanSelection.updateMany(query, { $set: { rentStartDate: new Date() } });
+              console.log(`Started rent for ${result.modifiedCount} plan selections for assigned driver ${vehicle.assignedDriver}`);
+
+              // Also try to start rent for matching bookings tied to this vehicle
+              try {
+                const bookingQuery = { vehicleId: vehicle._id, rentStartDate: null, status: { $in: ['confirmed','ongoing','pending'] }, $or: [] };
+                // Translate the orClauses into booking match clauses
+                for (const c of orClauses) {
+                  if (c.driverSignupId) bookingQuery.$or.push({ driverId: c.driverSignupId });
+                  if (c.driverMobile) bookingQuery.$or.push({ driverMobile: c.driverMobile });
+                  if (c.driverUsername) bookingQuery.$or.push({ driverName: c.driverUsername });
+                  if (c.driverName) bookingQuery.$or.push({ driverName: c.driverName });
+                  for (const clause of bookingQuery.$or) {
+                    try {
+                      const cQ = { vehicleId: vehicle._id, rentStartDate: null, status: { $in: ['confirmed','ongoing','pending'] }, ...clause };
+                      const count = await Booking.countDocuments(cQ);
+                      console.log('Booking Clause:', JSON.stringify(clause), 'matches:', count);
+                    } catch (e) {
+                      console.error('Error counting bookings clause:', clause, e);
+                    }
+                  }
+                  const totalBookingMatches = await Booking.countDocuments(bookingQuery);
+                  console.log('Total booking matches for combined query:', totalBookingMatches);
+                  const bookingResult = await Booking.updateMany(bookingQuery, { $set: { rentStartDate: new Date() } });
+                  console.log(`Started rent (bookings) for ${bookingResult.modifiedCount} booking(s) for vehicle ${vehicle.vehicleId || vehicle._id}`);
+
+                  // Verify updated bookings and log their rentStartDate values for debugging
+                  try {
+                    const updatedBookings = await Booking.find({ vehicleId: vehicle._id, rentStartDate: { $ne: null } }).limit(20).lean();
+                    console.log('Updated bookings with rentStartDate (sample):', updatedBookings.map(b => ({ id: b._id, rentStartDate: b.rentStartDate })));
+                  } catch (e) {
+                    console.error('Failed to fetch updated bookings for verification:', e);
+                  }
+                }
+              } catch (e) {
+                console.error('Failed to set rentStartDate on Bookings:', e);
+              }
+
+            } catch (e) {
+              console.error('Failed to set rentStartDate on DriverPlanSelection:', e);
+            }
+          } else if (becameInactive) {
+            // Stop rent by clearing rentStartDate (will cause rent calc to stop)
+            const query = { rentStartDate: { $ne: null }, status: 'active', $or: orClauses };
+            try {
+              console.log('Attempting to clear rentStartDate with query:', JSON.stringify(query));
+
+              // Debug: log counts per clause to help diagnose
+              for (const clause of orClauses) {
+                try {
+                  const cQuery = { rentStartDate: { $ne: null }, status: 'active', ...clause };
+                  const count = await DriverPlanSelection.countDocuments(cQuery);
+                  console.log('Clear Clause:', JSON.stringify(clause), 'matches:', count);
+                } catch (e) {
+                  console.error('Error counting clear-clause matches:', clause, e);
+                }
+              }
+
+              const totalMatches = await DriverPlanSelection.countDocuments(query);
+              console.log('Total matches for combined clear query:', totalMatches);
+
+              const result = await DriverPlanSelection.updateMany(query, { $set: { rentStartDate: null } });
+              console.log(`Cleared rentStartDate for ${result.modifiedCount} plan selections due to vehicle inactivity for assigned driver ${vehicle.assignedDriver}`);
+
+              // Also clear rentStartDate on matching bookings for this vehicle
+              try {
+                const bookingQuery = { vehicleId: vehicle._id, rentStartDate: { $ne: null }, status: { $in: ['confirmed','ongoing','pending'] }, $or: [] };
+                for (const c of orClauses) {
+                  if (c.driverSignupId) bookingQuery.$or.push({ driverId: c.driverSignupId });
+                  if (c.driverMobile) bookingQuery.$or.push({ driverMobile: c.driverMobile });
+                  if (c.driverUsername) bookingQuery.$or.push({ driverName: c.driverUsername });
+                  if (c.driverName) bookingQuery.$or.push({ driverName: c.driverName });
+                }
+                if (bookingQuery.$or.length > 0) {
+                  console.log('Attempting to clear rentStartDate on bookings with query:', JSON.stringify(bookingQuery));
+                  for (const clause of bookingQuery.$or) {
+                    try {
+                      const cQ = { vehicleId: vehicle._id, rentStartDate: { $ne: null }, status: { $in: ['confirmed','ongoing','pending'] }, ...clause };
+                      const count = await Booking.countDocuments(cQ);
+                      console.log('Booking Clear Clause:', JSON.stringify(clause), 'matches:', count);
+                    } catch (e) {
+                      console.error('Error counting booking clear clause:', clause, e);
+                    }
+                  }
+                  const totalBookingMatches = await Booking.countDocuments(bookingQuery);
+                  console.log('Total booking matches for combined clear query:', totalBookingMatches);
+                  const bookingResult = await Booking.updateMany(bookingQuery, { $set: { rentStartDate: null } });
+                  console.log(`Cleared rentStartDate (bookings) for ${bookingResult.modifiedCount} booking(s) for vehicle ${vehicle.vehicleId || vehicle._id}`);
+                }
+              } catch (e) {
+                console.error('Failed to clear rentStartDate on Bookings:', e);
+              }
+            } catch (e) {
+              console.error('Failed to clear rentStartDate on DriverPlanSelection:', e);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error while attempting to set rentStartDate after vehicle update:', e);
+    }
 
     if (!vehicle) {
       return res.status(404).json({ message: 'Vehicle not found' });

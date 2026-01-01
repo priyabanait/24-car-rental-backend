@@ -93,6 +93,15 @@ const bookingSchema = new mongoose.Schema({
     enum: ['cash', 'card', 'upi', 'netbanking', 'wallet'],
     default: 'cash'
   },
+  // Rent tracking fields
+  rentStartDate: {
+    type: Date,
+    default: null
+  },
+  rentPausedDate: {
+    type: Date,
+    default: null
+  },
   transactionId: {
     type: String
   },
@@ -212,6 +221,16 @@ bookingSchema.index({ vehicleId: 1, status: 1 });
 bookingSchema.index({ tripStartDate: 1, tripEndDate: 1 });
 bookingSchema.index({ createdAt: -1 });
 bookingSchema.index({ status: 1 });
+
+// Ensure a driver can have at most one active booking at a time (DB-level enforcement)
+// Partial unique index: only applies when status is pending|confirmed|ongoing
+bookingSchema.index(
+  { driverId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['pending', 'confirmed', 'ongoing'] } }
+  }
+);
 
 // Virtual for booking duration
 bookingSchema.virtual('duration').get(function() {

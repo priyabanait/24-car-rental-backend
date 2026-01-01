@@ -4,6 +4,12 @@ import Investor from '../models/investor.js';
 import InvestorSignup from '../models/investorSignup.js';
 import InvestmentFD from '../models/investmentFD.js';
 import { uploadToCloudinary } from '../lib/cloudinary.js';
+import jwt from 'jsonwebtoken';
+import dotenv from 'dotenv';
+import { authenticateToken } from './middleware.js';
+
+dotenv.config();
+const SECRET = process.env.JWT_SECRET || 'dev_secret';
 
 const router = express.Router();
 // GET investor form data by mobile number
@@ -81,6 +87,28 @@ router.post('/signup', async (req, res) => {
     const newInvestorSignup = new InvestorSignup({ investorName, email, phone, password });
     await newInvestorSignup.save();
 
+    // Emit a welcome notification (no pending approval message yet - that comes after registration completion)
+    try {
+      const { createAndEmitNotification } = await import('../lib/notify.js');
+      await createAndEmitNotification({
+        type: 'investor_signup',
+        title: `Welcome, ${newInvestorSignup.investorName || newInvestorSignup.phone}`,
+        message: 'Your investor account has been created. Please complete your registration.',
+        recipientType: 'investor',
+        recipientId: newInvestorSignup._id,
+        data: { id: newInvestorSignup._id, phone: newInvestorSignup.phone }
+      });
+    } catch (err) {
+      console.warn('Notify failed:', err.message);
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: newInvestorSignup._id, phone: newInvestorSignup.phone, type: 'investor' },
+      SECRET,
+      { expiresIn: '30d' }
+    );
+
     // Create wallet entry for this phone number
     try {
       const InvestorWallet = (await import('../models/investorWallet.js')).default;
@@ -94,6 +122,7 @@ router.post('/signup', async (req, res) => {
 
     res.status(201).json({ 
       message: 'Signup successful', 
+      token,
       investor: {
         id: newInvestorSignup._id,
         investorName: newInvestorSignup.investorName,
@@ -121,8 +150,17 @@ router.post('/login', async (req, res) => {
     if (investorSignup.password !== password) {
       return res.status(401).json({ error: 'Invalid password' });
     }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: investorSignup._id, phone: investorSignup.phone, type: 'investor' },
+      SECRET,
+      { expiresIn: '30d' }
+    );
+
     res.json({ 
       message: 'Login successful', 
+      token,
       investor: {
         id: investorSignup._id,
         investorName: investorSignup.investorName,
@@ -156,8 +194,32 @@ router.post('/signup-otp', async (req, res) => {
       password: otp 
     });
     await newInvestorSignup.save();
+
+    // Emit notification for new investor signup (no pending approval message yet - that comes after registration completion)
+    try {
+      const { createAndEmitNotification } = await import('../lib/notify.js');
+      await createAndEmitNotification({
+        type: 'investor_signup',
+        title: `New investor signed up: ${investorName || phone}`,
+        message: `Investor ${investorName || phone} has signed up via OTP. Please complete registration to proceed.`,
+        data: { id: newInvestorSignup._id, phone: newInvestorSignup.phone },
+        recipientType: 'investor',
+        recipientId: newInvestorSignup._id
+      });
+    } catch (err) {
+      console.warn('Notify failed:', err.message);
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: newInvestorSignup._id, phone: newInvestorSignup.phone, type: 'investor' },
+      SECRET,
+      { expiresIn: '30d' }
+    );
+
     res.status(201).json({ 
       message: 'Signup successful', 
+      token,
       investor: {
         id: newInvestorSignup._id,
         investorName: newInvestorSignup.investorName,
@@ -185,8 +247,17 @@ router.post('/login-otp', async (req, res) => {
     if (investorSignup.password !== otp) {
       return res.status(401).json({ error: 'Invalid OTP' });
     }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: investorSignup._id, phone: investorSignup.phone, type: 'investor' },
+      SECRET,
+      { expiresIn: '30d' }
+    );
+
     res.json({ 
       message: 'Login successful', 
+      token,
       investor: {
         id: investorSignup._id,
         investorName: investorSignup.investorName,
@@ -376,6 +447,21 @@ router.post('/', async (req, res) => {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
 
+      // Notify the investor that their registration is pending approval
+      try {
+        const { createAndEmitNotification } = await import('../lib/notify.js');
+        await createAndEmitNotification({
+          type: 'investor_registration_completed',
+          title: `Registration Submitted`,
+          message: `Your registration is pending approval. We'll notify you once it's reviewed.`,
+          data: { id: savedInvestor._id, phone: updated.phone },
+          recipientType: 'investor',
+          recipientId: investorSignup._id
+        });
+      } catch (err) {
+        console.warn('Notify failed:', err.message);
+      }
+
       return res.json({
         message: 'Registration completed successfully',
         investor: {
@@ -421,6 +507,18 @@ router.post('/', async (req, res) => {
 
     const newInvestor = new Investor(investorData);
     const saved = await newInvestor.save();
+    // Emit dashboard notification for new manual investor creation
+    try {
+      const { createAndEmitNotification } = await import('../lib/notify.js');
+      await createAndEmitNotification({
+        type: 'new_investor',
+        title: `New investor added - ${saved.investorName || saved.phone}`,
+        message: `${saved.investorName || saved.phone} was added to the system.`,
+        data: { id: saved._id, phone: saved.phone }
+      });
+    } catch (err) {
+      console.warn('Notify failed:', err.message);
+    }
     const result = {
       ...saved.toObject(),
       id: saved._id.toString()
@@ -565,6 +663,18 @@ router.post('/fd-records/:id', async (req, res) => {
     });
 
     const savedFD = await newFD.save();
+    // Emit dashboard notification for new FD creation
+    try {
+      const { createAndEmitNotification } = await import('../lib/notify.js');
+      await createAndEmitNotification({
+        type: 'new_fd',
+        title: `New FD created - ${savedFD.investorName || savedFD.phone}`,
+        message: `An FD of ₹${savedFD.investmentAmount} was created.`,
+        data: { id: savedFD._id, investorId: savedFD.investorId }
+      });
+    } catch (err) {
+      console.warn('Notify failed:', err.message);
+    }
     
     res.status(201).json({
       message: 'FD record created successfully',
@@ -645,6 +755,25 @@ router.post('/forgot-password', async (req, res) => {
   } catch (error) {
     console.error('Forgot password error:', error);
     res.status(500).json({ error: 'Password reset failed', message: error.message });
+  }
+});
+
+// Delete own account (investor) — authenticated route
+router.delete('/delete-account', authenticateToken, async (req, res) => {
+  try {
+    const user = req.user;
+    const id = user && user.id;
+    if (!id) return res.status(401).json({ message: 'Authentication required.' });
+
+    const deleted = await InvestorSignup.findByIdAndDelete(id);
+    if (!deleted) {
+      return res.status(404).json({ message: 'Investor account not found.' });
+    }
+
+    return res.json({ message: 'Account deleted. You will need to sign up again to use the app.' });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    return res.status(500).json({ error: 'Server error during account deletion.' });
   }
 });
 
