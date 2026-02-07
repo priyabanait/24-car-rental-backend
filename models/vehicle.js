@@ -39,6 +39,12 @@ const VehicleSchema = new mongoose.Schema({
   model: String,
   brand: String,
   category: String,
+  vehicleType: {
+    type: String,
+    enum: ['bike', 'car', 'scooty'],
+    index: true,
+    required: false
+  },
   carName: String,
   ownerName: String,
   ownerPhone: String,
@@ -60,6 +66,10 @@ const VehicleSchema = new mongoose.Schema({
     default: 5
   },
   pricePerDay: {
+    type: Number,
+    default: 0
+  },
+  pricePerHour: {
     type: Number,
     default: 0
   },

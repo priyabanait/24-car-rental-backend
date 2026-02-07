@@ -52,8 +52,16 @@ const bookingSchema = new mongoose.Schema({
     type: Date,
     required: true
   },
+  tripStartTime: {
+    type: String,
+    default: null
+  },
   tripEndDate: {
     type: Date
+  },
+  tripEndTime: {
+    type: String,
+    default: null
   },
   numberOfDays: {
     type: Number,
@@ -64,6 +72,10 @@ const bookingSchema = new mongoose.Schema({
   pricePerDay: {
     type: Number,
     required: true
+  },
+  pricePerHour: {
+    type: Number,
+    default: 0
   },
   totalAmount: {
     type: Number,
@@ -144,7 +156,7 @@ const bookingSchema = new mongoose.Schema({
   },
   bookingType: {
     type: String,
-    enum: ['daily', 'weekly', 'monthly', 'subscription'],
+    enum: ['daily', 'weekly', 'monthly', 'subscription', 'hourly'],
     default: 'daily'
   },
 

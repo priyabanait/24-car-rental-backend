@@ -60,7 +60,9 @@ router.post('/', verifyToken, async (req, res) => {
       pickupLocation,
       dropoffLocation,
       tripStartDate,
+      tripStartTime,
       tripEndDate,
+      tripEndTime,
       bookingType,
       deliveryRequired,
       deliveryAddress,
@@ -178,10 +180,24 @@ router.post('/', verifyToken, async (req, res) => {
     }
     const diffTime = Math.abs(endDate - startDate);
     const calculatedDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
+    const calculatedHours = Math.ceil(diffTime / (1000 * 60 * 60)) || 1;
 
-    // Calculate pricing (use provided values or calculate)
-    const pricePerDay = vehicle.pricePerDay || vehicle.dailyRate || 0;
-    const totalAmount = pricePerDay * (numberOfDays || calculatedDays);
+    // Calculate pricing based on booking type
+    let pricePerDay = vehicle.pricePerDay || vehicle.dailyRate || 0;
+    let pricePerHour = vehicle.pricePerHour || Math.ceil(pricePerDay / 24); // Default hourly = daily/24
+    let totalAmount = 0;
+    let calculatedDuration = calculatedDays;
+
+    if (bookingType === 'hourly') {
+      // For hourly bookings, calculate based on hours
+      totalAmount = pricePerHour * calculatedHours;
+      calculatedDuration = calculatedHours;
+    } else {
+      // For daily/weekly/monthly, calculate based on days
+      totalAmount = pricePerDay * (numberOfDays || calculatedDays);
+      calculatedDuration = numberOfDays || calculatedDays;
+    }
+
     const securityDeposit = vehicle.securityDeposit || 0;
     const discount = 0; // Can be calculated based on offers/coupons
     const calculatedFinalAmount = finalAmount || (totalAmount + securityDeposit - discount);
@@ -200,9 +216,12 @@ router.post('/', verifyToken, async (req, res) => {
       pickupLocation,
       dropoffLocation: dropoffLocation || pickupLocation,
       tripStartDate: startDate,
+      tripStartTime: tripStartTime || null,
       tripEndDate: endDate,
-      numberOfDays: numberOfDays || calculatedDays,
+      tripEndTime: tripEndTime || null,
+      numberOfDays: calculatedDuration,
       pricePerDay,
+      pricePerHour,
       totalAmount,
       securityDeposit,
       discount,

@@ -10,12 +10,10 @@ router.get('/', async (req, res) => {
     
     let query = {};
     
-    // Filter by active status
     if (isActive !== undefined) {
       query.isActive = isActive === 'true';
     }
     
-    // Search by name or state
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -34,9 +32,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const city = await City.findById(req.params.id);
-    if (!city) {
-      return res.status(404).json({ error: 'City not found' });
-    }
+    if (!city) return res.status(404).json({ error: 'City not found' });
     res.json(city);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -46,39 +42,27 @@ router.get('/:id', async (req, res) => {
 // Add new city
 router.post('/', async (req, res) => {
   try {
-    const { name, state, country, addresses, coordinates, isActive } = req.body;
-    
-    // Validate required fields
+    const { name, state, country, addresses, coordinates, isActive, image } = req.body;
+
     if (!name || !state) {
       return res.status(400).json({ error: 'Name and state are required' });
     }
-    
-    // Check if city already exists
-    const existingCity = await City.findOne({ 
-      name: name.trim(), 
-      state: state.trim() 
-    });
-    
-    if (existingCity) {
-      return res.status(400).json({ 
-        error: 'City already exists in this state' 
-      });
-    }
-    
+
+    const existingCity = await City.findOne({ name: name.trim(), state: state.trim() });
+    if (existingCity) return res.status(400).json({ error: 'City already exists in this state' });
+
     const city = new City({
       name: name.trim(),
       state: state.trim(),
       country: country || 'India',
       addresses: addresses || [],
       coordinates,
-      isActive: isActive !== undefined ? isActive : true
+      isActive: isActive !== undefined ? isActive : true,
+      image: image || ''
     });
-    
+
     await city.save();
-    res.status(201).json({ 
-      message: 'City added successfully', 
-      city 
-    });
+    res.status(201).json({ message: 'City added successfully', city });
   } catch (error) {
     if (error.code === 11000) {
       res.status(400).json({ error: 'City already exists' });
@@ -91,8 +75,8 @@ router.post('/', async (req, res) => {
 // Update city
 router.put('/:id', async (req, res) => {
   try {
-    const { name, state, country, addresses, coordinates, isActive, vehicleCount } = req.body;
-    
+    const { name, state, country, addresses, coordinates, isActive, image } = req.body;
+
     const updateData = {};
     if (name) updateData.name = name.trim();
     if (state) updateData.state = state.trim();
@@ -100,22 +84,16 @@ router.put('/:id', async (req, res) => {
     if (addresses !== undefined) updateData.addresses = addresses;
     if (coordinates) updateData.coordinates = coordinates;
     if (isActive !== undefined) updateData.isActive = isActive;
-    if (vehicleCount !== undefined) updateData.vehicleCount = vehicleCount;
-    
-    const city = await City.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true, runValidators: true }
-    );
-    
-    if (!city) {
-      return res.status(404).json({ error: 'City not found' });
-    }
-    
-    res.json({ 
-      message: 'City updated successfully', 
-      city 
+    if (image !== undefined) updateData.image = image;
+
+    const city = await City.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+      runValidators: true
     });
+
+    if (!city) return res.status(404).json({ error: 'City not found' });
+
+    res.json({ message: 'City updated successfully', city });
   } catch (error) {
     if (error.code === 11000) {
       res.status(400).json({ error: 'City name already exists' });
@@ -125,37 +103,19 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// Delete city (soft delete - mark as inactive)
+// Delete city (soft delete by default)
 router.delete('/:id', async (req, res) => {
   try {
     const { permanent } = req.query;
-    
+
     if (permanent === 'true') {
-      // Permanent delete
       const city = await City.findByIdAndDelete(req.params.id);
-      if (!city) {
-        return res.status(404).json({ error: 'City not found' });
-      }
-      res.json({ 
-        message: 'City permanently deleted', 
-        city 
-      });
+      if (!city) return res.status(404).json({ error: 'City not found' });
+      res.json({ message: 'City permanently deleted', city });
     } else {
-      // Soft delete - mark as inactive
-      const city = await City.findByIdAndUpdate(
-        req.params.id,
-        { isActive: false },
-        { new: true }
-      );
-      
-      if (!city) {
-        return res.status(404).json({ error: 'City not found' });
-      }
-      
-      res.json({ 
-        message: 'City deactivated successfully', 
-        city 
-      });
+      const city = await City.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+      if (!city) return res.status(404).json({ error: 'City not found' });
+      res.json({ message: 'City deactivated successfully', city });
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -165,20 +125,9 @@ router.delete('/:id', async (req, res) => {
 // Activate city
 router.patch('/:id/activate', async (req, res) => {
   try {
-    const city = await City.findByIdAndUpdate(
-      req.params.id,
-      { isActive: true },
-      { new: true }
-    );
-    
-    if (!city) {
-      return res.status(404).json({ error: 'City not found' });
-    }
-    
-    res.json({ 
-      message: 'City activated successfully', 
-      city 
-    });
+    const city = await City.findByIdAndUpdate(req.params.id, { isActive: true }, { new: true });
+    if (!city) return res.status(404).json({ error: 'City not found' });
+    res.json({ message: 'City activated successfully', city });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -188,23 +137,15 @@ router.patch('/:id/activate', async (req, res) => {
 router.post('/bulk', async (req, res) => {
   try {
     const { cities } = req.body;
-    
     if (!Array.isArray(cities) || cities.length === 0) {
       return res.status(400).json({ error: 'Cities array is required' });
     }
-    
+
     const results = await City.insertMany(cities, { ordered: false });
-    
-    res.status(201).json({ 
-      message: `${results.length} cities added successfully`, 
-      cities: results 
-    });
+    res.status(201).json({ message: `${results.length} cities added successfully`, cities: results });
   } catch (error) {
     if (error.code === 11000) {
-      res.status(400).json({ 
-        error: 'Some cities already exist',
-        details: error.writeErrors 
-      });
+      res.status(400).json({ error: 'Some cities already exist', details: error.writeErrors });
     } else {
       res.status(500).json({ error: error.message });
     }
@@ -221,13 +162,8 @@ router.get('/stats/summary', async (req, res) => {
       { $group: { _id: '$state', count: { $sum: 1 } } },
       { $sort: { count: -1 } }
     ]);
-    
-    res.json({
-      total,
-      active,
-      inactive,
-      byState
-    });
+
+    res.json({ total, active, inactive, byState });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

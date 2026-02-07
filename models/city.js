@@ -17,6 +17,11 @@ const CitySchema = new mongoose.Schema({
     default: 'India',
     trim: true 
   },
+  image: { // New field for city image
+    type: String, // store image URL or path
+    trim: true,
+    default: ''   // optional
+  },
   addresses: [{
     address: {
       type: String,
@@ -39,10 +44,6 @@ const CitySchema = new mongoose.Schema({
   coordinates: {
     latitude: Number,
     longitude: Number
-  },
-  vehicleCount: {
-    type: Number,
-    default: 0
   }
 }, { timestamps: true });
 

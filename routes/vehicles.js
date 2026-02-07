@@ -127,27 +127,32 @@ function normalizeVehicleShape(v) {
 // Get filter options - returns unique values for categories, fuel types, seating capacities
 router.get('/filter-options', async (req, res) => {
   try {
-    const { city, location, status = 'active' } = req.query;
-    
-    // Build base filter for active vehicles
-    const filter = { status };
-    
+    const { city, location, status = 'active', vehicleType } = req.query;
+
+    // Build base filter for vehicles
+    const filter = { };
+    if (status) filter.status = status;
+
     if (city) {
       filter.city = new RegExp(`^${city.trim()}$`, 'i');
     }
-    
+
     if (location) {
       filter.location = new RegExp(location.trim(), 'i');
     }
 
+    if (vehicleType) {
+      filter.vehicleType = new RegExp(`^${vehicleType.trim()}$`, 'i');
+    }
+
     // Get all vehicles matching the base filter
-    const vehicles = await Vehicle.find(filter).select('category fuelType seatingCapacity pricePerDay').lean();
+    const vehicles = await Vehicle.find(filter).select('category fuelType seatingCapacity pricePerDay vehicleType').lean();
 
     // Extract unique values
     const categories = [...new Set(vehicles.map(v => v.category).filter(Boolean))].sort();
     const fuelTypes = [...new Set(vehicles.map(v => v.fuelType).filter(Boolean))].sort();
     const seatingCapacities = [...new Set(vehicles.map(v => v.seatingCapacity).filter(Boolean))].sort((a, b) => a - b);
-    
+
     // Calculate price range
     const prices = vehicles.map(v => v.pricePerDay || 0).filter(p => p > 0);
     const priceRange = {
@@ -181,46 +186,41 @@ router.get('/search/by-location', async (req, res) => {
       city,
       location,
       category,
+      vehicleType,
       fuelType,
       seatingCapacity,
       minPrice,
       maxPrice,
       status = 'active',
       tripStart,
-      tripEnd
+      tripStartTime,
+      tripEnd,
+      tripEndTime,
+      bookingType = 'daily'
     } = req.query;
 
     const filter = {};
 
     // City filter (exact match, case-insensitive)
-    if (city) {
-      filter.city = new RegExp(`^${city.trim()}$`, 'i');
-    }
+    if (city) filter.city = new RegExp(`^${city.trim()}$`, 'i');
 
     // Location filter (partial match, case-insensitive)
-    if (location) {
-      filter.location = new RegExp(location.trim(), 'i');
-    }
+    if (location) filter.location = new RegExp(location.trim(), 'i');
 
-    // Status filter (default to active)
-    if (status) {
-      filter.status = status;
-    }
+    // Status filter
+    if (status) filter.status = status;
+
+    // Vehicle type filter
+    if (vehicleType) filter.vehicleType = new RegExp(`^${vehicleType.trim()}$`, 'i');
 
     // Category filter
-    if (category) {
-      filter.category = new RegExp(`^${category.trim()}$`, 'i');
-    }
+    if (category) filter.category = new RegExp(`^${category.trim()}$`, 'i');
 
     // Fuel type filter
-    if (fuelType) {
-      filter.fuelType = new RegExp(`^${fuelType.trim()}$`, 'i');
-    }
+    if (fuelType) filter.fuelType = new RegExp(`^${fuelType.trim()}$`, 'i');
 
     // Seating capacity filter
-    if (seatingCapacity) {
-      filter.seatingCapacity = parseInt(seatingCapacity);
-    }
+    if (seatingCapacity) filter.seatingCapacity = parseInt(seatingCapacity);
 
     // Price range filter
     if (minPrice || maxPrice) {
@@ -235,41 +235,61 @@ router.get('/search/by-location', async (req, res) => {
       .sort({ pricePerDay: 1, vehicleId: 1 })
       .lean();
 
-    // Filter out vehicles that are already booked for the requested dates
     let availableVehicles = vehicles;
-    
+
     if (tripStart) {
-      const startDate = new Date(tripStart);
-      const endDate = tripEnd ? new Date(tripEnd) : new Date(tripStart);
+      // Parse start date and time
+      let startDateTime = new Date(tripStart);
+      if (tripStartTime) {
+        const [hours, minutes] = tripStartTime.split(':');
+        startDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+      }
 
-      // Find all vehicle IDs that have conflicting bookings
-      const conflictingBookings = await Booking.find({
-        status: { $in: ['pending', 'confirmed', 'ongoing'] },
-        $or: [
-          {
-            tripStartDate: { $lte: startDate },
-            tripEndDate: { $gte: startDate }
-          },
-          {
-            tripStartDate: { $lte: endDate },
-            tripEndDate: { $gte: endDate }
-          },
-          {
-            tripStartDate: { $gte: startDate },
-            tripEndDate: { $lte: endDate }
-          }
-        ]
-      }).distinct('vehicleId');
+      // Parse end date and time
+      let endDateTime = tripEnd ? new Date(tripEnd) : new Date(tripStart);
+      if (tripEndTime) {
+        const [hours, minutes] = tripEndTime.split(':');
+        endDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+      } else if (!tripEnd && tripStartTime) {
+        const [hours, minutes] = tripStartTime.split(':');
+        endDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+      }
 
-      // Filter out vehicles with conflicting bookings
-      availableVehicles = vehicles.filter(vehicle => 
-        !conflictingBookings.some(bookedVehicleId => 
-          bookedVehicleId.toString() === vehicle._id.toString()
-        )
+      // Find conflicting bookings based on booking type
+      let conflictingBookings;
+      
+      if (bookingType === 'hourly') {
+        // For hourly bookings, check exact datetime overlaps
+        conflictingBookings = await Booking.find({
+          status: { $in: ['pending', 'confirmed', 'ongoing'] },
+          $or: [
+            { tripStartDate: { $lte: startDateTime }, tripEndDate: { $gte: startDateTime } },
+            { tripStartDate: { $lte: endDateTime }, tripEndDate: { $gte: endDateTime } },
+            { tripStartDate: { $gte: startDateTime }, tripEndDate: { $lte: endDateTime } }
+          ]
+        }).distinct('vehicleId');
+      } else {
+        // For daily/weekly/monthly, check at day-level (ignore time)
+        const startDay = new Date(tripStart);
+        startDay.setHours(0, 0, 0, 0);
+        
+        const endDay = tripEnd ? new Date(tripEnd) : new Date(tripStart);
+        endDay.setHours(23, 59, 59, 999);
+
+        conflictingBookings = await Booking.find({
+          status: { $in: ['pending', 'confirmed', 'ongoing'] },
+          tripStartDate: { $lte: endDay },
+          tripEndDate: { $gte: startDay }
+        }).distinct('vehicleId');
+      }
+
+      // Filter out booked vehicles
+      availableVehicles = vehicles.filter(v => 
+        !conflictingBookings.includes(v._id.toString())
       );
     }
 
-    // Format response with additional metadata
+    // Prepare response
     const response = {
       success: true,
       count: availableVehicles.length,
@@ -277,11 +297,17 @@ router.get('/search/by-location', async (req, res) => {
         city,
         location,
         category,
+        vehicleType,
         fuelType,
         seatingCapacity,
         minPrice,
         maxPrice,
-        status
+        status,
+        tripStart,
+        tripStartTime,
+        tripEnd,
+        tripEndTime,
+        bookingType
       },
       data: availableVehicles.map(normalizeVehicleShape)
     };
@@ -289,13 +315,14 @@ router.get('/search/by-location', async (req, res) => {
     res.json(response);
   } catch (err) {
     console.error('Error searching vehicles by location:', err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: 'Failed to search vehicles',
-      error: err.message 
+      error: err.message
     });
   }
 });
+
 
 // Search/filter vehicles
 router.get('/search', async (req, res) => {
@@ -305,6 +332,7 @@ router.get('/search', async (req, res) => {
       registrationNumber,
       brand,
       category,
+      vehicleType,
       model,
       carName,
       color,
@@ -344,6 +372,7 @@ router.get('/search', async (req, res) => {
     if (registrationNumber) filter.registrationNumber = new RegExp(registrationNumber, 'i');
     if (brand) filter.brand = new RegExp(brand, 'i');
     if (category) filter.category = new RegExp(category, 'i');
+    if (vehicleType) filter.vehicleType = new RegExp(vehicleType, 'i');
     if (model) filter.model = new RegExp(model, 'i');
     if (carName) filter.carName = new RegExp(carName, 'i');
     if (color) filter.color = new RegExp(color, 'i');
@@ -400,6 +429,7 @@ router.get('/', async (req, res) => {
     if (req.query.status) filter.status = req.query.status;
     if (req.query.brand) filter.brand = new RegExp(req.query.brand, 'i');
     if (req.query.category) filter.category = new RegExp(req.query.category, 'i');
+    if (req.query.vehicleType) filter.vehicleType = new RegExp(req.query.vehicleType, 'i');
     if (req.query.fuelType) filter.fuelType = new RegExp(req.query.fuelType, 'i');
     if (req.query.kycStatus) filter.kycStatus = req.query.kycStatus;
 
